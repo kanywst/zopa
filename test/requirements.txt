@@ -1,1 +1,1 @@
-wasmtime==46.0.1
+wasmtime==47.0.1
