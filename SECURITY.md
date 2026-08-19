@@ -24,10 +24,22 @@ In scope:
   use-after-free, leaks across the request arena).
 - Logic bugs that cause `evaluate()` to return `allow` when the policy
   forbids the request.
+- **Any path that fails open.** zopa's posture is that every situation
+  it cannot decide -- unreadable input, a policy that will not build, a
+  host call that errors, a request body it could only see part of --
+  results in a deny. A path that reaches `allow`, or that lets a
+  request through unevaluated, is a vulnerability even if nothing
+  crashes.
+- **Parser differentials.** zopa reads the same bytes as the service
+  behind it. An input that zopa and a mainstream JSON parser (Go,
+  JavaScript, OPA) read differently is a way to make a policy match one
+  value while the backend acts on another. Number grammar, duplicate
+  keys, escapes, and encoding all count.
 - proxy-wasm ABI misuse that crashes the host or escapes the wasm
   sandbox.
 - Parser bugs that cause unbounded recursion, stack overflow, or
-  memory blowup on adversarial input.
+  memory blowup on adversarial input. Note that `usize` is 32 bits on
+  wasm32, so arithmetic over host-supplied length fields can wrap.
 
 Out of scope:
 

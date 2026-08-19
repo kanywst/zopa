@@ -34,7 +34,51 @@ or equivalent, with the `wamr` runtime built in):
 zig build test-envoy
 ```
 
+If your Envoy ships V8 rather than wamr -- the upstream release binary
+does -- set the runtime:
+
+```bash
+ZOPA_ENVOY_RUNTIME=envoy.wasm.runtime.v8 zig build test-envoy
+```
+
 `zig build test-all` runs every suite that's available on the host.
+
+## Where a test belongs
+
+Pick the layer that would actually catch a regression:
+
+| Change                                                                      | Test goes in                              |
+| --------------------------------------------------------------------------- | ----------------------------------------- |
+| Parser, AST builder, evaluator semantics                                    | `src/*.zig` unit tests                    |
+| Anything a host calls across the wasm boundary                              | `test/run.mjs` and `test/run_wasmtime.py` |
+| proxy-wasm behaviour: phases, buffering, local responses, configure failure | `examples/envoy/run.sh`                   |
+| Rego-facing behaviour and `tools/rego2ast.py` coverage                      | `test/conformance/fixtures/`              |
+
+`examples/envoy/run.sh` is the only suite that exercises the shim.
+The other three call `evaluate` directly and would keep passing with a
+completely broken proxy-wasm layer, so a change to `src/proxy_wasm.zig`
+that isn't covered there isn't covered at all.
+
+Two habits worth keeping. Write the test so it fails for the reason
+you think it does -- the oversized-body case in `run.sh` uses a payload
+that would be *allowed* if zopa saw all of it, so a pass can only mean
+the truncation check fired. And when you touch `src/wire.zig` or
+`src/json.zig`, add a case to the matching fuzz test rather than only a
+fixed example.
+
+## Fuzzing
+
+`src/json.zig`, `src/eval.zig`, and `src/wire.zig` carry
+`std.testing.fuzz` targets over the three surfaces that take hostile
+bytes: the JSON parser, end-to-end evaluation, and the proxy-wasm
+header-map decoder. They run as single-iteration smoke tests during a
+normal `zig build test-unit`.
+
+Running them as actual fuzzers (`zig build test-unit --fuzz`) does not
+work on Zig 0.16.0: the toolchain's own `compiler/test_runner.zig`
+fails to compile in fuzz mode with a `StackTrace` type mismatch. That
+is upstream, not something this repository can fix. The targets are
+written so they start working the moment it is.
 
 ## Code style
 

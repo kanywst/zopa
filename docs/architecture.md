@@ -9,7 +9,10 @@
 | `src/json.zig`       | Recursive-descent JSON parser. Returns a `Value` tree shared with the AST module.                                                        |
 | `src/ast.zig`        | `Module` / `Rule` / `Expr` types and the JSON-to-AST builders.                                                                           |
 | `src/eval.zig`       | Evaluator. Linked-list scope frames for `some` / `every`. Explicit recursion cap.                                                        |
-| `src/proxy_wasm.zig` | proxy-wasm 0.2.1 ABI shim. Lifecycle exports, host imports, and the request-headers evaluation entry.                                    |
+| `src/builtins.zig`   | Builtin function table for the `call` node.                                                                                              |
+| `src/body_deps.zig`  | Configure-time analysis of how a policy references the request body. Decides whether a truncated body is decision-relevant.              |
+| `src/wire.zig`       | Header-map decoding and per-phase input synthesis. Deliberately free of ABI imports so unit tests can reach it on the host.              |
+| `src/proxy_wasm.zig` | proxy-wasm 0.2.1 ABI shim. Lifecycle exports, host imports, per-phase evaluation.                                                        |
 
 ## Memory model
 
@@ -42,6 +45,7 @@ safe.
 | `malloc(n)` return                                       | Host              | Host calls `free(ptr)`                   |
 | `host_allocator.dupe()` (e.g. `configured_policy`)       | wasm module       | Module on reconfigure / shutdown         |
 | `arena.allocator().alloc()`                              | Per-request arena | `resetRequestArena()` at end of evaluate |
+| The compiled policy (bytes + AST nodes)                  | Policy arena      | Replaced wholesale on reconfigure        |
 | Borrowed input slices in `evaluate(in_ptr, in_len, ...)` | Host              | Host (we never free these)               |
 
 The single rule that holds it together: a pointer minted by one
