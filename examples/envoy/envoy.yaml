@@ -4,6 +4,7 @@
 #   __WASM_PATH__   absolute path to zig-out/bin/zopa.wasm
 #   __PORT__        data plane listener port
 #   __ADMIN_PORT__  admin port (used to detect readiness)
+#   __RUNTIME__     wasm runtime id (wamr locally, v8 in CI)
 #
 # The route ends in `direct_response`, so no upstream is needed.
 # zopa runs as the first HTTP filter; deny short-circuits with 403,
@@ -71,9 +72,10 @@ static_resources:
                             }
                         vm_config:
                           # Homebrew Envoy ships `wamr`. The upstream
-                          # Docker image uses `envoy.wasm.runtime.v8`
-                          # instead. zopa runs on either.
-                          runtime: envoy.wasm.runtime.wamr
+                          # binary and Docker image use
+                          # `envoy.wasm.runtime.v8` instead. zopa runs
+                          # on either; run.sh picks via ZOPA_ENVOY_RUNTIME.
+                          runtime: __RUNTIME__
                           code:
                             local:
                               filename: __WASM_PATH__
