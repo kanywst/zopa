@@ -31,8 +31,19 @@ const HelperError = error{
     EvalTooDeep,
     PathNotObject,
     PathNotFound,
-    RefYieldsComposite,
 };
+
+/// Rego truthiness: only `false` and undefined (`nil`) are falsy.
+/// Every other value -- including `0`, `""`, and `[]` -- is truthy,
+/// because in Rego those are *defined* and definedness is what a rule
+/// body tests.
+fn truthy(v: json.Value) bool {
+    return switch (v) {
+        .boolean => |b| b,
+        .nil => false,
+        else => true,
+    };
+}
 
 /// Scope frame for variables introduced by `some` / `every`.
 const Scope = struct {
@@ -74,6 +85,12 @@ pub fn evaluateWithTarget(
 /// Run a single evaluation against `target_package.target_rule`. The
 /// AST source can be either a single module or a `Modules` bundle;
 /// the legacy single-module form is treated as `package = ""`.
+///
+/// This parses and builds the policy on every call, which is what the
+/// generic `evaluate` export has to do -- it receives the AST bytes
+/// per request and can't know they're the same ones as last time.
+/// Hosts that hold a policy across requests should build it once and
+/// call `evaluateCompiled`.
 pub fn evaluateAddressed(
     arena: *std.heap.ArenaAllocator,
     input_json: []const u8,
@@ -83,62 +100,75 @@ pub fn evaluateAddressed(
 ) !bool {
     const allocator = arena.allocator();
 
-    const input_value = try json.parse(allocator, input_json);
     const ast_value = try json.parse(allocator, ast_json);
     const bundle = try ast.buildModulesBundle(allocator, ast_value);
 
+    return evaluateCompiled(arena, input_json, bundle, target_package, target_rule);
+}
+
+/// Run a single evaluation against a bundle that was already built.
+///
+/// `bundle` must outlive the call and must NOT live on `arena` -- the
+/// arena is per-request and the whole point here is that the policy
+/// isn't. The proxy-wasm shim builds it once at configure time on a
+/// long-lived arena, which takes the JSON parse and the AST
+/// construction off the per-request path entirely; on a non-trivial
+/// policy that is the majority of the work.
+pub fn evaluateCompiled(
+    arena: *std.heap.ArenaAllocator,
+    input_json: []const u8,
+    bundle: ast.Modules,
+    target_package: []const u8,
+    target_rule: []const u8,
+) !bool {
+    const input_value = try json.parse(arena.allocator(), input_json);
     return evalBundle(bundle, target_package, target_rule, input_value);
 }
 
-/// OR-combine evalModule across every module whose package matches.
-/// Empty match set returns `false` (deny by default).
+/// Evaluate `target_rule` over every rule contributed to
+/// `target_package`, in bundle order. The first non-default rule whose
+/// body holds decides; a `default` rule anywhere in the package
+/// supplies the fallback; nothing matching at all denies.
+///
+/// The scan is package-wide rather than module-by-module on purpose.
+/// In Rego a package split across several files is one rule set, so
+/// `default allow = false` in one file governs `allow if ...` in
+/// another. Evaluating each module in isolation and OR-ing the results
+/// got that wrong twice over: the default only covered its own file,
+/// and an early module returning `true` short-circuited past a later
+/// module's explicit `value: false` deny.
 fn evalBundle(
     bundle: ast.Modules,
     target_package: []const u8,
     target_rule: []const u8,
     input: json.Value,
 ) !bool {
-    for (bundle.modules) |module| {
-        if (!std.mem.eql(u8, module.package, target_package)) continue;
-        if (try evalModule(module, target_rule, input)) return true;
-    }
-    return false;
-}
-
-/// Walk every rule named `target`. A `default` rule's value becomes
-/// the fallback; the first regular rule whose body holds wins.
-fn evalModule(module: ast.Module, target: []const u8, input: json.Value) !bool {
     var fallback: bool = false;
     var have_fallback: bool = false;
 
-    for (module.rules) |rule| {
-        if (!std.mem.eql(u8, rule.name, target)) continue;
+    for (bundle.modules) |module| {
+        if (!std.mem.eql(u8, module.package, target_package)) continue;
 
-        if (rule.is_default) {
-            if (rule.value) |vex| {
-                // Mirror the truthiness rule used for regular rules
-                // below: only `false` and `nil` are falsy; any other
-                // value (including non-booleans) is truthy.
-                const v = try resolveValue(vex, input, null, 0);
-                fallback = switch (v) {
-                    .boolean => |b| b,
-                    .nil => false,
-                    else => true,
-                };
-                have_fallback = true;
+        for (module.rules) |rule| {
+            if (!std.mem.eql(u8, rule.name, target_rule)) continue;
+
+            if (rule.is_default) {
+                // A `default` rule with no value is meaningless; skip
+                // it rather than letting it mask a real one.
+                if (rule.value) |vex| {
+                    fallback = truthy(try resolveValue(vex, input, null, 0));
+                    have_fallback = true;
+                }
+                continue;
             }
-            continue;
-        }
 
-        if (try evalBody(rule.body, input)) {
-            const decision = if (rule.value) |vex|
-                try resolveValue(vex, input, null, 0)
-            else
-                json.Value{ .boolean = true };
-            return switch (decision) {
-                .boolean => |b| b,
-                else => true,
-            };
+            if (try evalBody(rule.body, input)) {
+                const decision = if (rule.value) |vex|
+                    try resolveValue(vex, input, null, 0)
+                else
+                    json.Value{ .boolean = true };
+                return truthy(decision);
+            }
         }
     }
 
@@ -161,30 +191,25 @@ fn evalExprBool(
 ) HelperError!bool {
     if (depth >= max_eval_depth) return error.EvalTooDeep;
     return switch (expr.*) {
-        .value => |v| switch (v) {
-            .boolean => |b| b,
-            .nil => false,
-            else => true,
-        },
+        .value => |v| truthy(v),
         .ref => |path| blk: {
             // Missing paths are undefined in Rego; we treat that as
-            // `false` so incomplete input falls through to deny.
-            const v = resolveRef(input, scope, path) catch break :blk false;
-            break :blk switch (v) {
-                .boolean => |b| b,
-                .nil => false,
-                else => true,
+            // `false` so incomplete input falls through to deny. Only
+            // the two "not there" errors fold into false -- anything
+            // else (today just the depth guard) has to keep
+            // propagating, or a resource limit would read as a policy
+            // decision.
+            const v = resolveRef(input, scope, path) catch |err| switch (err) {
+                error.PathNotFound, error.PathNotObject => break :blk false,
+                else => return err,
             };
+            break :blk truthy(v);
         },
         .compare => |c| try evalCompare(c, input, scope, depth + 1),
         .not => |inner| !(try evalExprBool(inner, input, scope, depth + 1)),
         .some => |it| try evalSome(it, input, scope, depth + 1),
         .every => |it| try evalEvery(it, input, scope, depth + 1),
-        .call => |c| switch (try evalCall(c, input, scope, depth + 1)) {
-            .boolean => |b| b,
-            .nil => false,
-            else => true,
-        },
+        .call => |c| truthy(try evalCall(c, input, scope, depth + 1)),
     };
 }
 
@@ -371,23 +396,15 @@ fn resolveRef(
 
 /// Walk `path` through `value`. Returns the leaf as-is; the only
 /// failure modes are "non-object on the way down" and "key missing".
+///
+/// Member lookup goes through `json.lookupMember` so a bound variable
+/// resolves duplicate keys the same last-wins way `json.lookupPath`
+/// does for the input root.
 fn walkValue(value: json.Value, path: []const []const u8) HelperError!json.Value {
     var cur = value;
     for (path) |segment| {
-        switch (cur) {
-            .object => |members| {
-                var found = false;
-                for (members) |m| {
-                    if (std.mem.eql(u8, m.key, segment)) {
-                        cur = m.value;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) return error.PathNotFound;
-            },
-            else => return error.PathNotObject,
-        }
+        if (cur != .object) return error.PathNotObject;
+        cur = json.lookupMember(cur.object, segment) orelse return error.PathNotFound;
     }
     return cur;
 }
@@ -589,6 +606,108 @@ test "modules bundle: OR across two modules in same package" {
     try testing.expect(!(try runAddressed("{\"role\":\"guest\"}", policy, "authz", "allow")));
 }
 
+test "modules bundle: a package-level default covers sibling modules" {
+    // In Rego a package split across files is one rule set, so the
+    // `default allow = true` declared in the first module governs the
+    // second module's rules too.
+    const policy =
+        "{\"type\":\"modules\",\"modules\":[" ++
+        "{\"type\":\"module\",\"package\":\"authz\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"default\":true," ++
+        "\"value\":{\"type\":\"value\",\"value\":true}}]}," ++
+        "{\"type\":\"module\",\"package\":\"authz\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"body\":[" ++
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"role\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"banned\"}}]," ++
+        "\"value\":{\"type\":\"value\",\"value\":false}}]}" ++
+        "]}";
+
+    // Nothing matches -> the sibling module's default decides.
+    try testing.expect(try runAddressed("{\"role\":\"viewer\"}", policy, "authz", "allow"));
+    // The deny rule in module 2 overrides module 1's default.
+    try testing.expect(!(try runAddressed("{\"role\":\"banned\"}", policy, "authz", "allow")));
+}
+
+test "modules bundle: rule order is bundle order, across modules" {
+    // Module 1 allows tenant acme; module 2 denies banned roles. Both
+    // are rules of package `authz`, so they are one ordered rule set:
+    // whichever matches first decides, exactly as if they had been
+    // written in one file in that order.
+    const policy =
+        "{\"type\":\"modules\",\"modules\":[" ++
+        "{\"type\":\"module\",\"package\":\"authz\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"body\":[" ++
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"tenant\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"acme\"}}]}]}," ++
+        "{\"type\":\"module\",\"package\":\"authz\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"body\":[" ++
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"role\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"banned\"}}]," ++
+        "\"value\":{\"type\":\"value\",\"value\":false}}]}" ++
+        "]}";
+
+    try testing.expect(try runAddressed(
+        "{\"tenant\":\"acme\",\"role\":\"viewer\"}",
+        policy,
+        "authz",
+        "allow",
+    ));
+    // Module 1 matches first, so it decides -- a later module does not
+    // get to veto. Put deny-override rules ahead of what they override.
+    try testing.expect(try runAddressed(
+        "{\"tenant\":\"acme\",\"role\":\"banned\"}",
+        policy,
+        "authz",
+        "allow",
+    ));
+    // With module 1 not matching, evaluation carries on into module 2
+    // and its `value: false` deny is reached. The old module-at-a-time
+    // implementation returned module 1's "no match" as a plain false
+    // and never got here.
+    try testing.expect(!(try runAddressed(
+        "{\"tenant\":\"other\",\"role\":\"banned\"}",
+        policy,
+        "authz",
+        "allow",
+    )));
+}
+
+test "evaluate: input key literally named `input` is still reachable" {
+    // `lookupPath` strips one leading "input" segment, so addressing a
+    // real member called `input` needs the prefix spelled twice.
+    const policy =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"input\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"x\"}}";
+    try testing.expect(try run("{\"input\":\"x\"}", policy));
+}
+
+test "evaluate: duplicate keys in input resolve last-wins" {
+    const policy =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"user\",\"role\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"admin\"}}";
+    // The backend (Go/JS) reads "guest"; zopa must agree, i.e. deny.
+    try testing.expect(!(try run(
+        "{\"user\":{\"role\":\"admin\",\"role\":\"guest\"}}",
+        policy,
+    )));
+}
+
+test "evaluate: falsy-but-defined values stay truthy in body position" {
+    // Rego tests definedness, not JS truthiness: `0`, `""` and `[]`
+    // are all defined, so a bare ref to them holds.
+    try testing.expect(try run("{\"x\":0}", "{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}"));
+    try testing.expect(try run("{\"x\":\"\"}", "{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}"));
+    try testing.expect(try run("{\"x\":[]}", "{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}"));
+    // `null` and `false` are the only falsy ones.
+    try testing.expect(!(try run("{\"x\":null}", "{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}")));
+    try testing.expect(!(try run("{\"x\":false}", "{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}")));
+}
+
 fn runWithTarget(input: []const u8, ast_src: []const u8, target: []const u8) !bool {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -705,6 +824,47 @@ test "evaluate: every+some over arrays" {
         "{\"required\":[\"r\",\"d\"],\"granted\":[\"r\",\"w\"]}",
         policy,
     )));
+}
+
+test "fuzz: an arbitrary AST either decides or errors, never crashes" {
+    try testing.fuzz({}, fuzzEvaluate, .{});
+}
+
+fn fuzzEvaluate(_: void, smith: *std.testing.Smith) !void {
+    @disableInstrumentation();
+    var ast_buf: [512]u8 = undefined;
+    const ast_len = smith.sliceWeightedBytes(&ast_buf, &.{
+        .rangeAtMost(u8, 0x20, 0x7e, 1),
+        .value(u8, '{', 6),
+        .value(u8, '}', 6),
+        .value(u8, '[', 6),
+        .value(u8, ']', 6),
+        .value(u8, '"', 8),
+        .value(u8, ':', 4),
+        .value(u8, ',', 4),
+        .rangeAtMost(u8, 'a', 'z', 6),
+        .rangeAtMost(u8, '0', '9', 3),
+    });
+
+    var input_buf: [128]u8 = undefined;
+    const input_len = smith.sliceWeightedBytes(&input_buf, &.{
+        .rangeAtMost(u8, 0x20, 0x7e, 1),
+        .value(u8, '{', 4),
+        .value(u8, '}', 4),
+        .value(u8, '"', 6),
+        .value(u8, ':', 3),
+        .rangeAtMost(u8, 'a', 'z', 4),
+    });
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // The contract the wasm exports depend on: every outcome is either
+    // a boolean decision or an error. A hostile policy must not be
+    // able to reach unreachable code, blow the stack, or leave the
+    // arena in a state the next request inherits.
+    const decision = evaluate(&arena, input_buf[0..input_len], ast_buf[0..ast_len]) catch return;
+    std.mem.doNotOptimizeAway(decision);
 }
 
 test "evaluate: depth guard fires" {
