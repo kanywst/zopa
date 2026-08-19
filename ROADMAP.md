@@ -3,6 +3,46 @@
 Plans are best-effort. Priorities shift with adoption signals; if
 something here matters to you, open an issue.
 
+## Where this sits in 2026
+
+Four things moved in the ecosystem zopa lives in, and they shape what
+is worth building next.
+
+**AuthZEN 1.0 is final.** The OpenID Foundation approved [Authorization
+API 1.0][authzen] as a Final Specification on 12 January 2026,
+standardising the PEP↔PDP wire format. This is the most directly
+relevant of the four: an AuthZEN Access Evaluation request is already a
+valid zopa input, so a compliant PDP can use zopa as its decision core
+without an adapter. The mapping, the error case, and a conformance
+fixture are in [`docs/authzen.md`](docs/authzen.md). Building an HTTP
+PDP is out of scope for this repository -- zopa is the engine, not the
+server -- but the mapping staying correct is not.
+
+**proxy-wasm 0.3.0 has not shipped.** The milestone is still open in
+[proxy-wasm/spec][pw] with unresolved issues filed through mid-2026;
+work continues in the `vNEXT` ABI directory rather than a cut release.
+The one concrete vNEXT change zopa already carries is
+`proxy_on_memory_allocate`, exported alongside `malloc` so the module
+loads on either generation of host. Chasing the rest of 0.3 before it
+stabilises would buy nothing.
+
+**Envoy dynamic modules are the competing extension path.** Loading a
+shared library skips the VM entirely and is faster for body-heavy
+filters. It also gives up the sandbox and pins you to an Envoy version
+per build. That trade is real, and it is why the README says plainly
+when *not* to reach for zopa. Where a policy engine is loading
+attacker-adjacent configuration into a shared proxy, the isolation
+boundary is the feature.
+
+**Wasm 3.0 (Dec 2025) and WASI 0.3 (June 2026) landed.** Neither
+changes much here: zopa is `wasm32-freestanding`, uses no GC, no
+exceptions, no 64-bit memory, and no syscalls. The component model is
+worth revisiting once it reaches 1.0 and proxy-wasm hosts speak it, but
+today a component wrapper would add size for no capability.
+
+[authzen]: https://openid.net/specs/authorization-api-1_0.html
+[pw]: https://github.com/proxy-wasm/spec
+
 ## Done in v0.2.0
 
 - **Body-aware policies.** New `allow_body` target rule fires from
@@ -57,8 +97,19 @@ something here matters to you, open an issue.
 - **Cross-engine benchmark.** Once the conformance harness covers
   enough of Rego to assert "same answer" between zopa and OPA, run
   a real head-to-head latency / memory-floor / cold-start bench.
+- **Per-root-context policies.** `proxy_on_configure` currently
+  ignores the root context id, so a VM shared by two filter
+  configurations (an explicit shared `vm_id`) keeps only the last
+  policy. Supporting more than one needs a root-context table plus a
+  stream→root mapping recorded in `proxy_on_context_create`.
 - **proxy-wasm 0.3.x** when the spec stabilizes (design in
-  `docs/proposals/proxy-wasm-0-3.md`).
+  `docs/proposals/proxy-wasm-0-3.md`). Still an open milestone
+  upstream as of August 2026; `proxy_on_memory_allocate` is the only
+  vNEXT piece adopted so far.
+- **Reference AuthZEN PDP.** A thin HTTP server -- separate
+  repository -- that exposes `/access/v1/evaluation` over a zopa
+  instance, so the mapping in `docs/authzen.md` has an executable
+  counterpart. Deliberately not part of the wasm module.
 
 ## Longer term
 
@@ -71,6 +122,10 @@ something here matters to you, open an issue.
   in `tools/rego2ast.py` and runs against `opa parse` output. The
   wasm module stays a runtime, not a language.
 - WASI support. zopa targets `wasm32-freestanding`; WASI would pull
-  in syscalls we don't need.
+  in syscalls we don't need. This holds for WASI 0.3 (June 2026) as
+  much as for 0.2 -- the async primitives it adds solve a problem
+  zopa doesn't have, since evaluation never blocks.
+- An HTTP server, a management plane, or bundle distribution. Those
+  are what OPA is for. zopa is a decision function.
 - A query language separate from Rego. The AST is Rego-shaped on
   purpose.

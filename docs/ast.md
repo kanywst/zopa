@@ -21,10 +21,12 @@ A complete policy:
 | `rules`   | Required. List of `Rule` objects.                                                                                    |
 | `package` | Optional. Default `""`. Used by `Modules` bundles (below) to address a specific module via `(package, target_rule)`. |
 
-Evaluation picks every rule whose `name` matches the target rule
-(default `"allow"`) and OR-combines them. A bare expression at the
-top level (without `"type": "module"`) is wrapped into a synthetic
-`allow` rule -- handy for tests and small policies.
+Evaluation walks every rule whose `name` matches the target rule
+(default `"allow"`), in declaration order, and the first one whose body
+holds decides. See [Rule dispatch](#rule-dispatch) for the exact
+ordering, which matters once a package spans several modules. A bare
+expression at the top level (without `"type": "module"`) is wrapped
+into a synthetic `allow` rule -- handy for tests and small policies.
 
 ## Modules bundle
 
@@ -66,6 +68,47 @@ working unchanged.
 | `default` | Optional, default `false`. When true, this rule's `value` is the fallback when no other rule with the same name fires.   |
 | `body`    | Optional. Implicit AND of expressions. Every entry must evaluate truthy for the rule to fire. Empty body = always fires. |
 | `value`   | Optional. Resolved when the body fires. Defaults to boolean `true`. Non-boolean values are treated as truthy.            |
+
+## Rule dispatch
+
+Given a target `(package, rule)`, evaluation collects the rules named
+`rule` from **every module in the bundle whose `package` matches**, in
+bundle order, and treats them as one rule set. Then:
+
+1. The first non-default rule whose `body` holds decides. Its `value`
+   is resolved and coerced to a decision; no later rule runs.
+2. If no non-default rule holds, the `default` rule's `value` decides.
+   A `default` declared in any module of the package covers the whole
+   package -- not just the module it appears in.
+3. If there is neither, the decision is deny.
+
+The package-wide part matters. In Rego a package split across files is
+one rule set, so `default allow = false` in one file governs
+`allow if ...` in another. Evaluating each module in isolation and
+OR-ing the results gets this wrong twice: the default would only cover
+its own module, and an early module returning `true` would short-circuit
+past a later module's explicit `"value": false` deny.
+
+Ordering is the contract. A rule that fires wins outright, including
+when its `value` is `false` -- that is how a deny-override rule is
+written:
+
+```json
+{ "type": "modules", "modules": [
+  { "type": "module", "package": "authz", "rules": [
+    { "type": "rule", "name": "allow", "default": true,
+      "value": { "type": "value", "value": true } } ] },
+
+  { "type": "module", "package": "authz", "rules": [
+    { "type": "rule", "name": "allow",
+      "body": [ { "type": "eq",
+        "left":  { "type": "ref", "path": ["input", "user", "role"] },
+        "right": { "type": "value", "value": "banned" } } ],
+      "value": { "type": "value", "value": false } } ] }
+]}
+```
+
+Put deny-override rules ahead of the rules they need to override.
 
 ## Expressions
 
@@ -209,11 +252,35 @@ beyond that resolve to `nil`. Unknown builtin names also resolve to
 | `0`  | Deny. No rule fired and no truthy default rule.                             |
 | `-1` | Error. Parse failure, unknown node type, recursion cap, etc. Treat as deny. |
 
+## JSON strictness
+
+zopa reads the same bytes as the service behind the proxy. Anywhere the
+two parsers could disagree about a document is a place to make a policy
+read one value while the backend reads another, so the parser is
+deliberately strict and deliberately conventional:
+
+- **Numbers follow the RFC 8259 grammar exactly.** `01`, `1.`, `.5`,
+  `+1`, `1e`, and `1_000` are all rejected, matching Go, JavaScript, and
+  OPA. A document containing one fails to parse and the decision is
+  `-1`, i.e. deny.
+- **Duplicate object keys resolve last-wins.** `{"role":"admin",
+  "role":"guest"}` means `guest`, which is what Go's `encoding/json` and
+  `JSON.parse` do.
+- **Control bytes below `0x20` must be escaped**, per the spec. The
+  proxy-wasm shim escapes them when it synthesises input from headers,
+  so a header carrying a raw control byte can't produce a document zopa
+  then refuses.
+- **Lone surrogates are rejected**; valid surrogate pairs decode to the
+  non-BMP code point.
+
 ## Limits
 
 - Maximum JSON nesting depth: 64.
 - Maximum evaluation recursion depth: 32 (`compare` / `not` / `some` /
   `every` / `resolveValue`).
+- Maximum request body buffered by the proxy-wasm shim: 64 KiB. A body
+  over the cap denies when the policy reads the body -- see
+  [`proxy-wasm.md`](proxy-wasm.md).
 
-Both limits are constants in the source -- bump them if you have a
+The limits are constants in the source -- bump them if you have a
 documented need.

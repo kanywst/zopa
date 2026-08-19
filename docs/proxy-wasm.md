@@ -21,51 +21,72 @@ A host that supports a different version should refuse to load.
 
 ### Buffer ownership
 
-| Name     | Signature            | Notes                                                                                                                    |
-| -------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `malloc` | `(size: i32) -> i32` | Returns 0 on OOM. The block has an 8-byte length prefix in front of the payload; the host sees only the payload pointer. |
-| `free`   | `(ptr: i32) -> void` | Length is recovered from the prefix; no length argument needed.                                                          |
+| Name                       | Signature            | Notes                                                                                                               |
+| -------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `malloc`                   | `(size: i32) -> i32` | Returns 0 on OOM. The block has a length prefix in front of the payload; the host sees only the payload pointer.    |
+| `proxy_on_memory_allocate` | `(size: i32) -> i32` | The same allocator under the name proxy-wasm ABI vNEXT uses. Hosts probe for it first and fall back to `malloc`.    |
+| `free`                     | `(ptr: i32) -> void` | Length is recovered from the prefix; no length argument needed. A null pointer is ignored rather than dereferenced. |
 
 ### Lifecycle
 
-| Name                        | Signature                                         | Status                                                                                                                                                                                                |
-| --------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `proxy_on_vm_start`         | `(root_id, vm_config_size) -> i32`                | Returns 1 (OK).                                                                                                                                                                                       |
-| `proxy_on_configure`        | `(context_id, config_size) -> i32`                | Reads the policy AST JSON via `proxy_get_buffer_bytes(BufferType.PluginConfiguration)` and stores it in `host_allocator`. Returning 0 from here is treated as an unrecoverable load failure by Envoy. |
-| `proxy_on_context_create`   | `(context_id, parent_context_id) -> void`         | No-op.                                                                                                                                                                                                |
-| `proxy_on_request_headers`  | `(context_id, num_headers, end_of_stream) -> i32` | Builds the request-side input and evaluates against the `allow` target rule. Returns `Action.Continue`. Sends a 403 via `proxy_send_local_response` on deny.                                          |
-| `proxy_on_request_body`     | `(context_id, body_size, end_of_stream) -> i32`   | Once the host signals end of stream, reads the body up to `max_body_bytes` (64 KiB) and evaluates against `allow_body` with `{body, body_raw}` input. Sends 403 + Pause on deny; otherwise Continue.  |
-| `proxy_on_response_headers` | `(context_id, num_headers, end_of_stream) -> i32` | Builds a response-side input (`{response: {status, headers}}`) and evaluates against `allow_response`. Replaces the upstream response with a 503 on deny.                                             |
-| `proxy_on_done`             | `(context_id) -> i32`                             | Returns 1.                                                                                                                                                                                            |
+| Name                        | Signature                                         | Status                                                                                                                                                                                                                                                                                |
+| --------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `proxy_on_vm_start`         | `(root_id, vm_config_size) -> i32`                | Returns 1 (OK).                                                                                                                                                                                                                                                                       |
+| `proxy_on_configure`        | `(context_id, config_size) -> i32`                | Reads the policy AST JSON via `proxy_get_buffer_bytes(BufferType.PluginConfiguration)`, then parses and builds it onto a long-lived arena. Returns 0 -- an unrecoverable load failure, as far as Envoy is concerned -- if the configuration is empty, unreadable, or not a valid AST. |
+| `proxy_on_context_create`   | `(context_id, parent_context_id) -> void`         | No-op.                                                                                                                                                                                                                                                                                |
+| `proxy_on_request_headers`  | `(context_id, num_headers, end_of_stream) -> i32` | Builds the request-side input and evaluates against the `allow` target rule. `Action.Continue` on allow; on deny, sends a 403 via `proxy_send_local_response` and returns `Action.Pause`.                                                                                             |
+| `proxy_on_request_body`     | `(context_id, body_size, end_of_stream) -> i32`   | Buffers (`StopIterationAndBuffer`) until end of stream, then reads up to `max_body_bytes` (64 KiB) and evaluates `allow_body`. 403 + Pause on deny. No-op when the policy has no `allow_body` rule.                                                                                   |
+| `proxy_on_response_headers` | `(context_id, num_headers, end_of_stream) -> i32` | Builds a response-side input (`{response: {status, headers}}`) and evaluates against `allow_response`. Replaces the upstream response with a 503 on deny.                                                                                                                             |
+| `proxy_on_done`             | `(context_id) -> i32`                             | Returns 1.                                                                                                                                                                                                                                                                            |
 
 ### Phase-to-target mapping
 
-| Phase                       | Target rule      | Input shape                     | Deny status |
-| --------------------------- | ---------------- | ------------------------------- | ----------- |
-| `proxy_on_request_headers`  | `allow`          | `{method, path, headers}`       | 403         |
-| `proxy_on_request_body`     | `allow_body`     | `{body, body_raw}`              | 403 + Pause |
-| `proxy_on_response_headers` | `allow_response` | `{response: {status, headers}}` | 503         |
+| Phase                       | Target rule      | Input shape                        | Deny status |
+| --------------------------- | ---------------- | ---------------------------------- | ----------- |
+| `proxy_on_request_headers`  | `allow`          | `{method, path, headers}`          | 403         |
+| `proxy_on_request_body`     | `allow_body`     | `{body, body_raw, body_truncated}` | 403 + Pause |
+| `proxy_on_response_headers` | `allow_response` | `{response: {status, headers}}`    | 503         |
 
 The three phases evaluate independently. A single `Modules` bundle
 can carry rules for each phase.
 
-**Phase opt-in via rule name.** At configure time the shim scans the
-policy JSON for the strings `"allow_body"` and `"allow_response"`. If
-either is absent the corresponding callback short-circuits as a
-no-op without running `evaluate`. This preserves v0.1.0 behaviour
-for policies that only define `allow`: the body and response phases
-are silent until the user explicitly opts in by writing a rule with
-the matching name. Detection is a substring match; false positives
-(e.g. a literal `"allow_body"` string in policy data) only cause an
-extra eval, never an incorrect decision.
+**Phase opt-in via rule name.** At configure time the shim walks the
+compiled AST looking for rules named `allow_body` and `allow_response`.
+If either is absent the corresponding callback short-circuits as a
+no-op without running `evaluate`. This preserves v0.1.0 behaviour for
+policies that only define `allow`: the body and response phases are
+silent until the user opts in by writing a rule with the matching name.
+
+Detection is a real AST walk, not a substring match over the policy
+text, so a literal `"allow_body"` string sitting in policy *data*
+cannot switch the body phase on.
+
+**Body buffering.** The body callback returns `StopIterationAndBuffer`
+for every chunk before end of stream. That is not optional: with
+`Continue`, the host forwards each fragment as it arrives and the
+buffer visible at end of stream holds only the tail, so a policy
+reading `input.body.amount` on a body split across two TCP segments
+would be deciding on a suffix. Buffering costs latency on multi-chunk
+bodies, which is why the whole callback is gated on an `allow_body`
+rule existing.
+
+**Oversized bodies.** A body larger than `max_body_bytes` is refused
+with a 403 whenever the policy actually reads the body -- which the
+shim knows from `body_deps.analyzeTarget` at configure time. Evaluating
+the prefix instead would look safe and would not be: a truncated JSON
+body fails to parse, `input.body` becomes null, the deny rule watching
+`input.body.amount` finds nothing to match, and the oversized request
+sails through. Sending a big body would be a one-line bypass. When the
+policy's `allow_body` rules don't read the body at all, truncation
+changes nothing and evaluation proceeds.
 
 ### Generic ABI (not proxy-wasm)
 
-| Name                 | Signature                                                                                                                              | Notes                                                                                                            |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `evaluate`           | `(input_ptr, input_len, ast_ptr, ast_len) -> i32`                                                                                      | Targets package `""` + rule `"allow"`. 1=allow, 0=deny, -1=error. Arena reset on every exit.                     |
-| `evaluate_target`    | `(input_ptr, input_len, ast_ptr, ast_len, target_ptr, target_len) -> i32`                                                              | Same as `evaluate` but with an explicit target rule (e.g. `allow_response`, `allow_body`).                       |
-| `evaluate_addressed` | `(input_ptr, input_len, ast_ptr, ast_len, package_ptr, package_len, target_ptr, target_len) -> i32`                                    | Dispatches into a specific `(package, rule)` pair within a `{"type":"modules", ...}` bundle.                     |
+| Name                 | Signature                                                                                           | Notes                                                                                        |
+| -------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `evaluate`           | `(input_ptr, input_len, ast_ptr, ast_len) -> i32`                                                   | Targets package `""` + rule `"allow"`. 1=allow, 0=deny, -1=error. Arena reset on every exit. |
+| `evaluate_target`    | `(input_ptr, input_len, ast_ptr, ast_len, target_ptr, target_len) -> i32`                           | Same as `evaluate` but with an explicit target rule (e.g. `allow_response`, `allow_body`).   |
+| `evaluate_addressed` | `(input_ptr, input_len, ast_ptr, ast_len, package_ptr, package_len, target_ptr, target_len) -> i32` | Dispatches into a specific `(package, rule)` pair within a `{"type":"modules", ...}` bundle. |
 
 ## Imports
 
@@ -97,6 +118,28 @@ request header map:
 }
 ```
 
+The body phase gets its own shape:
+
+```json
+{
+  "body":           { "amount": 5000 },
+  "body_raw":       "{\"amount\":5000}",
+  "body_truncated": false
+}
+```
+
+`body` is the parsed document when the bytes are valid JSON and `null`
+otherwise, so a policy can still match on `body_raw` for non-JSON
+payloads. `body_truncated` reports that the bytes are a prefix; the
+shim already denies in that case when the policy reads the body, but
+the flag is addressable so a policy can decide for itself.
+
+Header keys and values are escaped when the input is synthesised,
+including every control byte below `0x20`. A header value containing
+`"` or `\` cannot terminate its string literal and inject a sibling
+key -- there is a round-trip property test for exactly this in
+`src/wire.zig`.
+
 `:method` and `:path` are pulled via `proxy_get_header_map_value`
 because some hosts (Envoy with the `wamr` runtime, in particular)
 omit pseudo-headers from `proxy_get_header_map_pairs`. Real headers
@@ -116,8 +159,35 @@ config:
       { "type": "module", "rules": [ ... ] }
 ```
 
-zopa stores a `host_allocator.dupe` of those bytes for the lifetime
-of the module. Reconfiguration replaces the previous copy.
+zopa copies those bytes onto a dedicated arena, parses them, and builds
+the AST there once. The built policy lives for the lifetime of the
+module, so per-request work is the input parse plus the rule walk --
+the policy is never re-parsed. Reconfiguration builds the new policy
+first and only discards the old arena once the new one is known to
+build, so a bad reconfigure cannot strand a healthy filter with no
+policy loaded.
+
+An empty or invalid configuration is a configuration failure, not a
+runtime one: `proxy_on_configure` returns 0 and logs. With Envoy's
+default `fail_open: false` the filter refuses to start and requests get
+a 503, which is the loud version of the right answer. The alternative
+-- accepting the config and passing every request through -- is an
+authorization filter that silently protects nothing.
+
+## Failure posture
+
+Every path that cannot reach a decision denies:
+
+| Situation                                       | Result                                    |
+| ----------------------------------------------- | ----------------------------------------- |
+| No policy configured                            | Configure fails                           |
+| Policy does not parse or does not build         | Configure fails                           |
+| Callbacks run with no policy loaded             | 403                                       |
+| Input synthesis fails (host call errors, OOM)   | 403                                       |
+| Header map is malformed                         | Headers dropped, rules still have to hold |
+| Body over the 64 KiB cap, policy reads the body | 403                                       |
+| Evaluation returns an error (`-1`)              | 403                                       |
+| Response phase denies                           | 503                                       |
 
 ## Runtime selection
 
