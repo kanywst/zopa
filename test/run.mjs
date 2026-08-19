@@ -830,6 +830,33 @@ check(
   decideAddressed({ tenant: 'other', user: { role: 'banned' } }, conflicting, 'authz', 'allow'),
   0,
 );
+// Two `default` declarations for one rule: rego_type_error in OPA,
+// rejected when the AST is built here.
+check(
+  'two defaults for one rule -> -1',
+  decideAddressed(
+    {},
+    {
+      type: 'modules',
+      modules: [
+        {
+          type: 'module',
+          package: 'authz',
+          rules: [{ type: 'rule', name: 'allow', default: true, value: { type: 'value', value: false } }],
+        },
+        {
+          type: 'module',
+          package: 'authz',
+          rules: [{ type: 'rule', name: 'allow', default: true, value: { type: 'value', value: true } }],
+        },
+      ],
+    },
+    'authz',
+    'allow',
+  ),
+  -1,
+);
+
 check(
   'two definitions agreeing on true -> allow, no conflict',
   decideAddressed(
