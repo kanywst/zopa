@@ -321,14 +321,22 @@ export fn proxy_on_request_body(_: i32, body_size: i32, end_of_stream: i32) i32 
     // mirroring v0.1.0 behaviour where this callback was a no-op.
     if (!has_allow_body) return action_continue;
     if (end_of_stream == 0) return action_pause;
-    if (body_size <= 0) return action_continue;
 
     const policy = compiled_policy orelse {
         denyWithStatus(403);
         return action_pause;
     };
 
-    const size: usize = @intCast(body_size);
+    // A zero-length body still gets evaluated. Returning early here
+    // would skip `allow_body` entirely -- including its `default` --
+    // so a deny-by-default body policy would allow any request sent
+    // with `Content-Length: 0`. The phase runs; the policy decides.
+    //
+    // What this cannot promise is that a request with no body at all
+    // reaches the callback: whether the host invokes it for a bodyless
+    // request is up to the host. Checks that must run on every request
+    // belong in the `allow` rule, which fires on headers.
+    const size: usize = if (body_size > 0) @intCast(body_size) else 0;
     const truncated = size > max_body_bytes;
     if (truncated and body_class != .no_body_refs) {
         logMsg(log_level_warn, "zopa: request body exceeds buffer cap; denying");
@@ -406,12 +414,17 @@ fn evaluateBody(policy: ast.Modules, body_size: usize, truncated: bool) bool {
     defer memory.resetRequestArena();
     const allocator = arena.allocator();
 
-    const cap = @min(body_size, max_body_bytes);
-    // A body we were told exists but could not read is a deny, not an
-    // empty body evaluated as if the request carried nothing.
-    const body = readBodyBytes(allocator, cap) catch {
-        logMsg(log_level_warn, "zopa: could not read request body; denying");
-        return false;
+    // Skip the host call for an empty body rather than asking for zero
+    // bytes -- hosts differ on whether that is a valid read, and a
+    // spurious error here would deny every bodyless request.
+    const body: []const u8 = if (body_size == 0) "" else blk: {
+        const cap = @min(body_size, max_body_bytes);
+        // A body we were told exists but could not read is a deny, not
+        // an empty body evaluated as if the request carried nothing.
+        break :blk readBodyBytes(allocator, cap) catch {
+            logMsg(log_level_warn, "zopa: could not read request body; denying");
+            return false;
+        };
     };
     const input = wire.buildBodyInput(allocator, body, truncated) catch return false;
 
