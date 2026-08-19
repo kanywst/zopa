@@ -13,6 +13,15 @@
 //! Covers the full JSON grammar: objects, arrays, strings (including
 //! `\uXXXX` and surrogate-pair escapes), numbers (parsed as `f64`),
 //! and the three literals.
+//!
+//! Strictness matters here for a reason that isn't obvious: zopa sees
+//! the same request as the service behind it. If the two parsers
+//! disagree about a document, a policy can be made to read one value
+//! while the backend reads another. So the number grammar is the
+//! RFC 8259 one (no `01`, no `1.`, no `.5`, no `+1`) rather than
+//! whatever `parseFloat` happens to accept, and duplicate object keys
+//! resolve last-wins, matching Go's `encoding/json` (hence OPA/Rego)
+//! and JavaScript's `JSON.parse`.
 
 const std = @import("std");
 
@@ -219,20 +228,69 @@ const Parser = struct {
         return true;
     }
 
+    /// Scan exactly the RFC 8259 number grammar:
+    ///
+    /// ```text
+    ///   number = [ "-" ] int [ frac ] [ exp ]
+    ///   int    = "0" / ( digit1-9 *DIGIT )
+    ///   frac   = "." 1*DIGIT
+    ///   exp    = ( "e" / "E" ) [ "+" / "-" ] 1*DIGIT
+    /// ```
+    ///
+    /// Handing the slice straight to `parseFloat` would also accept
+    /// `01`, `1.`, `1e`, and `-.5`; a host that rejects those sees a
+    /// different document than we do, which is exactly the kind of
+    /// disagreement a policy bypass is built on.
     fn parseNumber(self: *Parser) ParseError!Value {
         const start = self.i;
+
         if (self.peek() == @as(u8, '-')) self.i += 1;
-        while (self.i < self.src.len) : (self.i += 1) {
-            const c = self.src[self.i];
-            switch (c) {
-                '0'...'9', '.', 'e', 'E', '+', '-' => {},
-                else => break,
+
+        // int: a lone `0`, or a non-zero digit followed by digits.
+        const lead = self.peek() orelse return error.InvalidNumber;
+        if (lead == '0') {
+            self.i += 1;
+            // `01` would otherwise scan as `0` and leave `1` behind as
+            // a trailing token. Rejecting it here names the actual
+            // problem instead of blaming the next character.
+            if (self.hasDigit()) return error.InvalidNumber;
+        } else if (lead >= '1' and lead <= '9') {
+            self.skipDigits();
+        } else {
+            return error.InvalidNumber;
+        }
+
+        // frac
+        if (self.peek() == @as(u8, '.')) {
+            self.i += 1;
+            if (!self.hasDigit()) return error.InvalidNumber;
+            self.skipDigits();
+        }
+
+        // exp
+        if (self.peek()) |c| {
+            if (c == 'e' or c == 'E') {
+                self.i += 1;
+                if (self.peek()) |sign| {
+                    if (sign == '+' or sign == '-') self.i += 1;
+                }
+                if (!self.hasDigit()) return error.InvalidNumber;
+                self.skipDigits();
             }
         }
-        if (self.i == start) return error.InvalidNumber;
+
         const text = self.src[start..self.i];
         const f = std.fmt.parseFloat(f64, text) catch return error.InvalidNumber;
         return .{ .number = f };
+    }
+
+    fn hasDigit(self: *Parser) bool {
+        const c = self.peek() orelse return false;
+        return c >= '0' and c <= '9';
+    }
+
+    fn skipDigits(self: *Parser) void {
+        while (self.hasDigit()) self.i += 1;
     }
 };
 
@@ -343,11 +401,20 @@ pub fn lookupPath(root: Value, path: []const []const u8) !Value {
     return cur;
 }
 
-/// First member with `key`, or `null` if none. Public so the AST
-/// builder can reuse it without a second copy.
+/// Value bound to `key`, or `null` if the object has no such member.
+/// Public so the AST builder and the evaluator both reuse it instead
+/// of open-coding the scan.
+///
+/// Scans backwards so a duplicated key resolves to the *last*
+/// occurrence. That is what Go's `encoding/json` and JavaScript's
+/// `JSON.parse` do, so a request body carrying `{"role":"admin",
+/// "role":"guest"}` means the same thing to zopa as it does to the
+/// service behind the proxy.
 pub fn lookupMember(members: []const Value.Member, key: []const u8) ?Value {
-    for (members) |m| {
-        if (std.mem.eql(u8, m.key, key)) return m.value;
+    var i = members.len;
+    while (i > 0) {
+        i -= 1;
+        if (std.mem.eql(u8, members[i].key, key)) return members[i].value;
     }
     return null;
 }
@@ -475,6 +542,124 @@ test "parse: scalars" {
     try testing.expect((try parse(a, "null")) == .nil);
     try testing.expectEqual(@as(f64, 42), (try parse(a, "42")).number);
     try testing.expectEqual(@as(f64, -3.5), (try parse(a, "-3.5")).number);
+}
+
+test "fuzz: parse never crashes and never over-reads" {
+    try testing.fuzz({}, fuzzParse, .{});
+}
+
+fn fuzzParse(_: void, smith: *std.testing.Smith) !void {
+    @disableInstrumentation();
+    var buf: [512]u8 = undefined;
+    // Weighted towards JSON punctuation and escape starters so the
+    // fuzzer spends its budget inside the grammar rather than on
+    // documents that die at the first byte.
+    const len = smith.sliceWeightedBytes(&buf, &.{
+        .rangeAtMost(u8, 0x00, 0xff, 1),
+        .rangeAtMost(u8, 0x20, 0x7e, 3),
+        .value(u8, '{', 6),
+        .value(u8, '}', 6),
+        .value(u8, '[', 6),
+        .value(u8, ']', 6),
+        .value(u8, '"', 8),
+        .value(u8, '\\', 8),
+        .value(u8, ':', 4),
+        .value(u8, ',', 4),
+        .rangeAtMost(u8, '0', '9', 4),
+        .value(u8, 'u', 4),
+        .value(u8, '-', 2),
+        .value(u8, '.', 2),
+        .value(u8, 'e', 2),
+    });
+    const src = buf[0..len];
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const v = parse(arena.allocator(), src) catch return;
+
+    // Anything that parsed has to be walkable: strings either alias
+    // `src` or live in the arena, and every child is reachable.
+    walk(v);
+}
+
+fn walk(v: Value) void {
+    @disableInstrumentation();
+    switch (v) {
+        .nil, .boolean, .number => {},
+        .string => |s| for (s) |c| std.mem.doNotOptimizeAway(c),
+        .array, .set => |xs| for (xs) |x| walk(x),
+        .object => |members| for (members) |m| {
+            for (m.key) |c| std.mem.doNotOptimizeAway(c);
+            walk(m.value);
+        },
+    }
+}
+
+test "parse: RFC 8259 number grammar is enforced" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Accepted forms.
+    try testing.expectEqual(@as(f64, 0), (try parse(a, "0")).number);
+    try testing.expectEqual(@as(f64, -0.5), (try parse(a, "-0.5")).number);
+    try testing.expectEqual(@as(f64, 1200), (try parse(a, "1.2e3")).number);
+    try testing.expectEqual(@as(f64, 0.012), (try parse(a, "1.2E-2")).number);
+    try testing.expectEqual(@as(f64, 120), (try parse(a, "1.2e+2")).number);
+
+    // Rejected forms. Every one of these is accepted by a bare
+    // `parseFloat` call, and rejected by Go / JavaScript / OPA. Which
+    // error comes back depends on whether the scanner stops inside the
+    // number or leaves a trailing token; the contract is only that the
+    // document does not parse.
+    const bad = [_][]const u8{
+        "01", // leading zero
+        "-01", // leading zero after sign
+        "1.", // trailing decimal point
+        ".5", // no integer part
+        "-.5",
+        "+1", // explicit plus
+        "1e", // empty exponent
+        "1e+", // sign but no exponent digits
+        "1.2.3", // two decimal points
+        "-", // sign only
+        "1_000", // separators are not JSON
+    };
+    for (bad) |src| {
+        if (parse(a, src)) |_| {
+            std.debug.print("expected \"{s}\" to be rejected\n", .{src});
+            return error.TestUnexpectedResult;
+        } else |_| {}
+    }
+}
+
+test "parse: number rejection also fires nested in a document" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectError(
+        error.InvalidNumber,
+        parse(arena.allocator(), "{\"amount\":007}"),
+    );
+}
+
+test "lookupMember: duplicate keys resolve last-wins" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    // Go, JavaScript, and OPA all read "guest" here. If zopa read
+    // "admin" a request could satisfy an admin-only policy while the
+    // backend saw a guest.
+    const v = try parse(arena.allocator(), "{\"role\":\"admin\",\"role\":\"guest\"}");
+    try testing.expectEqualStrings("guest", lookupMember(v.object, "role").?.string);
+    try testing.expect(lookupMember(v.object, "absent") == null);
+}
+
+test "lookupPath: duplicate keys resolve last-wins through nesting" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const root = try parse(arena.allocator(), "{\"u\":{\"r\":1},\"u\":{\"r\":2}}");
+    const got = try lookupPath(root, &.{ "input", "u", "r" });
+    try testing.expectEqual(@as(f64, 2), got.number);
 }
 
 test "parse: object and nested array" {
