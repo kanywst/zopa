@@ -11,13 +11,18 @@
 # and Dependabot's, which are a lockfile bump against a pinned SHA -- a
 # review pass there costs tokens to say nothing.
 #
-# One surprise worth knowing about: the action refuses to run when this
-# file differs from the copy on the default branch, and reports it as a
-# pass. So a PR that changes this workflow -- including the one that
-# first adds it -- gets no review, and the job finishes in seconds with
-# a green check. That is upstream's anti-tampering gate, not a
-# misconfiguration; it starts working on the first PR opened after this
-# file lands on main.
+# `github_token` is passed explicitly. Without it the action mints its
+# own token by exchanging an OIDC token with the Claude GitHub App, and
+# that exchange refuses to proceed when this file differs from the copy
+# on the default branch -- an anti-tampering gate, so a PR cannot
+# rewrite its own reviewer. The failure mode is quiet: the job reports
+# success and finishes in seconds having reviewed nothing, which is
+# indistinguishable from a working setup unless you read the log. With
+# `github_token` supplied, `setupGitHubToken()` returns it directly and
+# the OIDC path never runs, so the review works on PRs that touch this
+# file too. Comments are then authored by github-actions[bot] rather
+# than the Claude app, and the scope is exactly the job's `permissions`
+# block below.
 
 name: claude-review
 
@@ -71,6 +76,7 @@ jobs:
         if: steps.guard.outputs.enabled == 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           claude_args: >-
             --allowedTools
             "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(zig build test-unit),Bash(zig build --release=small),Bash(wc:*)"
