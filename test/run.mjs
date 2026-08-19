@@ -781,6 +781,78 @@ check(
   0,
 );
 
+// Two definitions of the same complete rule that hold at once with
+// different values ask for two outputs. OPA reports that as
+// eval_conflict_error; zopa returns -1, which every caller denies on.
+// Resolving it by bundle order instead would make the answer depend on
+// which file a rule happens to live in.
+const conflicting = {
+  type: 'modules',
+  modules: [
+    {
+      type: 'module',
+      package: 'authz',
+      rules: [
+        {
+          type: 'rule',
+          name: 'allow',
+          body: [{ type: 'eq', left: { type: 'ref', path: ['input', 'tenant'] }, right: { type: 'value', value: 'acme' } }],
+        },
+      ],
+    },
+    {
+      type: 'module',
+      package: 'authz',
+      rules: [
+        {
+          type: 'rule',
+          name: 'allow',
+          body: [{ type: 'eq', left: refRole, right: { type: 'value', value: 'banned' } }],
+          value: { type: 'value', value: false },
+        },
+      ],
+    },
+  ],
+};
+
+check(
+  'conflicting definitions -> -1 (deny), not first-in-bundle',
+  decideAddressed({ tenant: 'acme', user: { role: 'banned' } }, conflicting, 'authz', 'allow'),
+  -1,
+);
+check(
+  'only the allow definition holds -> allow',
+  decideAddressed({ tenant: 'acme', user: { role: 'viewer' } }, conflicting, 'authz', 'allow'),
+  1,
+);
+check(
+  'only the deny definition holds -> deny',
+  decideAddressed({ tenant: 'other', user: { role: 'banned' } }, conflicting, 'authz', 'allow'),
+  0,
+);
+check(
+  'two definitions agreeing on true -> allow, no conflict',
+  decideAddressed(
+    { user: { role: 'admin' } },
+    {
+      type: 'modules',
+      modules: [
+        {
+          type: 'module',
+          package: 'authz',
+          rules: [
+            { type: 'rule', name: 'allow', body: [{ type: 'eq', left: refRole, right: { type: 'value', value: 'admin' } }] },
+            { type: 'rule', name: 'allow', body: [{ type: 'value', value: true }] },
+          ],
+        },
+      ],
+    },
+    'authz',
+    'allow',
+  ),
+  1,
+);
+
 // ---------------------------------------------------------------------------
 // 16. Parser agreement with the backend. zopa and the service behind
 //     it read the same bytes, so anywhere the two parsers could

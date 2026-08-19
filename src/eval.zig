@@ -126,9 +126,8 @@ pub fn evaluateCompiled(
 }
 
 /// Evaluate `target_rule` over every rule contributed to
-/// `target_package`, in bundle order. The first non-default rule whose
-/// body holds decides; a `default` rule anywhere in the package
-/// supplies the fallback; nothing matching at all denies.
+/// `target_package`. A `default` rule anywhere in the package supplies
+/// the fallback; nothing matching at all denies.
 ///
 /// The scan is package-wide rather than module-by-module on purpose.
 /// In Rego a package split across several files is one rule set, so
@@ -137,6 +136,21 @@ pub fn evaluateCompiled(
 /// got that wrong twice over: the default only covered its own file,
 /// and an early module returning `true` short-circuited past a later
 /// module's explicit `value: false` deny.
+///
+/// Every satisfied rule is evaluated, not just the first. `allow` is a
+/// *complete* rule: OPA raises `eval_conflict_error` ("complete rules
+/// must not produce multiple outputs") when two definitions hold at
+/// once with different values, and it does not resolve that by source
+/// order. Returning the first match would make zopa answer `allow`
+/// where OPA errors, and would make the answer depend on bundle
+/// ordering -- which carries no meaning in Rego and shifts when files
+/// are split or renamed. `error.RuleConflict` surfaces as `-1`, which
+/// every caller treats as deny.
+///
+/// Two definitions agreeing on a value is not a conflict, matching
+/// Rego. The cost of not short-circuiting is that a satisfied policy
+/// evaluates all of its `allow` rules rather than stopping at the
+/// first; OPA pays the same cost for the same reason.
 fn evalBundle(
     bundle: ast.Modules,
     target_package: []const u8,
@@ -145,6 +159,7 @@ fn evalBundle(
 ) !bool {
     var fallback: bool = false;
     var have_fallback: bool = false;
+    var decision: ?json.Value = null;
 
     for (bundle.modules) |module| {
         if (!std.mem.eql(u8, module.package, target_package)) continue;
@@ -154,7 +169,9 @@ fn evalBundle(
 
             if (rule.is_default) {
                 // A `default` rule with no value is meaningless; skip
-                // it rather than letting it mask a real one.
+                // it rather than letting it mask a real one. Defaults
+                // never conflict -- they only apply when nothing else
+                // produced a value.
                 if (rule.value) |vex| {
                     fallback = truthy(try resolveValue(vex, input, null, 0));
                     have_fallback = true;
@@ -162,16 +179,22 @@ fn evalBundle(
                 continue;
             }
 
-            if (try evalBody(rule.body, input)) {
-                const decision = if (rule.value) |vex|
-                    try resolveValue(vex, input, null, 0)
-                else
-                    json.Value{ .boolean = true };
-                return truthy(decision);
+            if (!try evalBody(rule.body, input)) continue;
+
+            const value = if (rule.value) |vex|
+                try resolveValue(vex, input, null, 0)
+            else
+                json.Value{ .boolean = true };
+
+            if (decision) |already| {
+                if (!json.valueEquals(already, value)) return error.RuleConflict;
+            } else {
+                decision = value;
             }
         }
     }
 
+    if (decision) |v| return truthy(v);
     return if (have_fallback) fallback else false;
 }
 
@@ -629,11 +652,12 @@ test "modules bundle: a package-level default covers sibling modules" {
     try testing.expect(!(try runAddressed("{\"role\":\"banned\"}", policy, "authz", "allow")));
 }
 
-test "modules bundle: rule order is bundle order, across modules" {
+test "modules bundle: two definitions holding at once is a conflict" {
     // Module 1 allows tenant acme; module 2 denies banned roles. Both
-    // are rules of package `authz`, so they are one ordered rule set:
-    // whichever matches first decides, exactly as if they had been
-    // written in one file in that order.
+    // are definitions of the same complete rule `authz.allow`, so an
+    // input satisfying both asks for two different outputs. OPA reports
+    // that as eval_conflict_error rather than picking one by source
+    // order, and so do we -- the caller turns the error into a deny.
     const policy =
         "{\"type\":\"modules\",\"modules\":[" ++
         "{\"type\":\"module\",\"package\":\"authz\",\"rules\":[" ++
@@ -655,9 +679,10 @@ test "modules bundle: rule order is bundle order, across modules" {
         "authz",
         "allow",
     ));
-    // Module 1 matches first, so it decides -- a later module does not
-    // get to veto. Put deny-override rules ahead of what they override.
-    try testing.expect(try runAddressed(
+    // Both hold: true from module 1, false from module 2. Answering
+    // `allow` here would diverge from OPA and would make the decision
+    // depend on which module happens to come first in the bundle.
+    try testing.expectError(error.RuleConflict, runAddressed(
         "{\"tenant\":\"acme\",\"role\":\"banned\"}",
         policy,
         "authz",
@@ -673,6 +698,51 @@ test "modules bundle: rule order is bundle order, across modules" {
         "authz",
         "allow",
     )));
+}
+
+test "modules bundle: definitions agreeing on a value are not a conflict" {
+    // Two rules that both hold and both yield `true` are fine in Rego:
+    // a complete rule may have any number of definitions as long as
+    // they produce the same output. This is the ordinary `allow if A`
+    // / `allow if B` shape, so treating it as a conflict would break
+    // almost every real policy.
+    const policy =
+        "{\"type\":\"module\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"default\":true," ++
+        "\"value\":{\"type\":\"value\",\"value\":false}}," ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"body\":[" ++
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"role\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"admin\"}}]}," ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"body\":[" ++
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"tenant\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"acme\"}}]}" ++
+        "]}";
+
+    try testing.expect(try run("{\"role\":\"admin\",\"tenant\":\"acme\"}", policy));
+    try testing.expect(try run("{\"role\":\"admin\",\"tenant\":\"other\"}", policy));
+    try testing.expect(try run("{\"role\":\"guest\",\"tenant\":\"acme\"}", policy));
+    try testing.expect(!(try run("{\"role\":\"guest\",\"tenant\":\"other\"}", policy)));
+}
+
+test "modules bundle: a default never conflicts with a rule that fires" {
+    // `default allow = true` plus a rule yielding false is the
+    // deny-override shape the response and body phases use. The default
+    // is a fallback, not a competing definition, so it must not trip
+    // the conflict check.
+    const policy =
+        "{\"type\":\"module\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"default\":true," ++
+        "\"value\":{\"type\":\"value\",\"value\":true}}," ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"body\":[" ++
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"role\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"banned\"}}]," ++
+        "\"value\":{\"type\":\"value\",\"value\":false}}" ++
+        "]}";
+    try testing.expect(try run("{\"role\":\"viewer\"}", policy));
+    try testing.expect(!(try run("{\"role\":\"banned\"}", policy)));
 }
 
 test "evaluate: input key literally named `input` is still reachable" {

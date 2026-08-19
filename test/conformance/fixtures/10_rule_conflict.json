@@ -1,0 +1,10 @@
+{
+  "name":  "rule_conflict",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if input.tenant == \"acme\"\n\nallow = false if input.role == \"banned\"\n",
+  "cases": [
+    { "input": { "tenant": "acme",  "role": "banned" }, "expected": -1 },
+    { "input": { "tenant": "acme",  "role": "viewer" }, "expected": 1 },
+    { "input": { "tenant": "other", "role": "banned" }, "expected": 0 },
+    { "input": { "tenant": "other", "role": "viewer" }, "expected": 0 }
+  ]
+}
