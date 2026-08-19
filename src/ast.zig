@@ -162,7 +162,9 @@ pub fn buildModulesBundle(allocator: std.mem.Allocator, node: Value) !Modules {
                 for (list_v.array, 0..) |item, i| {
                     mods[i] = try buildModule(allocator, item);
                 }
-                return .{ .modules = mods };
+                const bundle = Modules{ .modules = mods };
+                try validateDefaults(bundle);
+                return bundle;
             }
         }
     }
@@ -170,7 +172,45 @@ pub fn buildModulesBundle(allocator: std.mem.Allocator, node: Value) !Modules {
     const single = try buildModule(allocator, node);
     const mods = try allocator.alloc(Module, 1);
     mods[0] = single;
-    return .{ .modules = mods };
+    const bundle = Modules{ .modules = mods };
+    try validateDefaults(bundle);
+    return bundle;
+}
+
+/// Reject a package that declares `default` twice for the same rule.
+///
+/// OPA rejects this when it compiles the policy -- `rego_type_error:
+/// multiple default rules data.authz.allow found` -- and does not pick
+/// one. Accepting it here and letting the last declaration win would
+/// make the fallback depend on bundle ordering, which is the same
+/// order-dependence the evaluator refuses for conflicting non-default
+/// rules; it would just be quieter, because a fallback only shows up on
+/// the requests where nothing else matched.
+///
+/// Checked at build time rather than during evaluation because it is a
+/// property of the policy, not of any request. On the proxy-wasm path
+/// that means a bad policy fails `proxy_on_configure` instead of
+/// denying every request; on the generic path it is `-1`.
+///
+/// Quadratic in the number of `default` rules, which is one per rule
+/// name in every policy that isn't already broken.
+fn validateDefaults(bundle: Modules) !void {
+    for (bundle.modules, 0..) |mod_a, i| {
+        for (mod_a.rules, 0..) |rule_a, ri| {
+            if (!rule_a.is_default) continue;
+
+            for (bundle.modules[i..], i..) |mod_b, j| {
+                if (!std.mem.eql(u8, mod_a.package, mod_b.package)) continue;
+                const start: usize = if (j == i) ri + 1 else 0;
+                for (mod_b.rules[start..]) |rule_b| {
+                    if (!rule_b.is_default) continue;
+                    if (std.mem.eql(u8, rule_a.name, rule_b.name)) {
+                        return error.DuplicateDefaultRule;
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn buildRule(allocator: std.mem.Allocator, node: Value) !Rule {
@@ -358,6 +398,68 @@ test "buildModule: canonical" {
     const m = try buildModule(arena.allocator(), node);
     try testing.expectEqual(@as(usize, 1), m.rules.len);
     try testing.expect(m.rules[0].is_default);
+}
+
+fn buildBundleFromJson(arena: *std.heap.ArenaAllocator, src: []const u8) !Modules {
+    const node = try json.parse(arena.allocator(), src);
+    return buildModulesBundle(arena.allocator(), node);
+}
+
+test "buildModulesBundle: two defaults for one rule are rejected" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // Same package, two `default allow` declarations. OPA reports
+    // `multiple default rules data.authz.allow found` at compile time;
+    // silently keeping the last would make the fallback depend on which
+    // module came first in the bundle.
+    const across_modules =
+        "{\"type\":\"modules\",\"modules\":[" ++
+        "{\"type\":\"module\",\"package\":\"authz\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"default\":true," ++
+        "\"value\":{\"type\":\"value\",\"value\":false}}]}," ++
+        "{\"type\":\"module\",\"package\":\"authz\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"default\":true," ++
+        "\"value\":{\"type\":\"value\",\"value\":true}}]}" ++
+        "]}";
+    try testing.expectError(
+        error.DuplicateDefaultRule,
+        buildBundleFromJson(&arena, across_modules),
+    );
+
+    // Also within one module.
+    const within_module =
+        "{\"type\":\"module\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"default\":true," ++
+        "\"value\":{\"type\":\"value\",\"value\":false}}," ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"default\":true," ++
+        "\"value\":{\"type\":\"value\",\"value\":true}}" ++
+        "]}";
+    try testing.expectError(
+        error.DuplicateDefaultRule,
+        buildBundleFromJson(&arena, within_module),
+    );
+}
+
+test "buildModulesBundle: defaults for different rules or packages are fine" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // One default per rule name is the normal shape, and the same rule
+    // name in a *different* package is a different rule.
+    const ok =
+        "{\"type\":\"modules\",\"modules\":[" ++
+        "{\"type\":\"module\",\"package\":\"authz\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"default\":true," ++
+        "\"value\":{\"type\":\"value\",\"value\":false}}," ++
+        "{\"type\":\"rule\",\"name\":\"allow_body\",\"default\":true," ++
+        "\"value\":{\"type\":\"value\",\"value\":true}}]}," ++
+        "{\"type\":\"module\",\"package\":\"audit\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"default\":true," ++
+        "\"value\":{\"type\":\"value\",\"value\":true}}]}" ++
+        "]}";
+    const bundle = try buildBundleFromJson(&arena, ok);
+    try testing.expectEqual(@as(usize, 2), bundle.modules.len);
 }
 
 test "buildModule: bare expression wraps into allow rule" {

@@ -64,6 +64,13 @@ once the first stable tag ships.
   field. `input.body_truncated` deliberately still does not count: a
   policy reading the flag is asking to handle truncation itself, and
   refusing the request first would take that away.
+- **Two `default` declarations for the same rule are rejected.** The
+  last one silently won, so the fallback depended on bundle ordering --
+  quietly, since a fallback only applies to requests where nothing else
+  matched. OPA rejects this at compile time (`rego_type_error: multiple
+  default rules data.authz.allow found`); zopa now rejects it when the
+  AST is built, which fails `proxy_on_configure` rather than skewing
+  decisions at runtime.
 - **A zero-length body is evaluated instead of skipped.** The body
   callback returned early on `body_size <= 0`, which skipped
   `allow_body` and its `default`. Note this was not reachable through

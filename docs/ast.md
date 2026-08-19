@@ -121,8 +121,16 @@ Definitions that agree are fine, which is what makes the ordinary
 ]}
 ```
 
-A `default` never conflicts with anything: it is a fallback, not a
-competing definition. So the deny-override shape below is well defined
+A `default` never conflicts with a regular rule: it is a fallback, not
+a competing definition. Two `default` declarations for the *same* rule
+are a different matter -- OPA rejects them when it compiles the policy
+(`rego_type_error: multiple default rules data.authz.allow found`), and
+zopa rejects the AST at build time with the same reasoning it applies
+to conflicting rules: keeping the last one would make the fallback
+depend on bundle ordering, and a fallback only shows up on the requests
+where nothing else matched, so the divergence would be quiet. On the
+proxy-wasm path that surfaces as a configuration failure; through the
+generic exports it is `-1`. So the deny-override shape below is well defined
 no matter where the rules sit, and it is what the `allow_response` and
 `allow_body` phases use:
 
