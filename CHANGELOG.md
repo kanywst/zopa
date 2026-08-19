@@ -45,6 +45,17 @@ once the first stable tag ships.
   later module's explicit `"value": false` deny. All rules contributed
   to a package are now one rule set, matching Rego. Documented under
   "Rule dispatch" in `docs/ast.md`.
+- **Conflicting rule definitions error instead of resolving by
+  order.** `allow` is a complete rule, and OPA raises
+  `eval_conflict_error` ("complete rules must not produce multiple
+  outputs") when two definitions hold at once with different values.
+  zopa returned whichever came first in the bundle, so the decision
+  depended on file layout -- something that carries no meaning in Rego
+  and changes when modules are reordered or split -- and answered
+  `allow` where OPA refuses to answer. It now returns `-1`, which every
+  caller denies on. Definitions that agree are still fine, and a
+  `default` never conflicts. Checked against real `opa parse` output in
+  `test/conformance/fixtures/10_rule_conflict.json`.
 - `free(0)` no longer reads a length prefix from below address zero;
   the export takes a nullable pointer and ignores null.
 - `body_deps.zig` is actually wired into the shim. Its doc comment

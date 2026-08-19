@@ -75,12 +75,15 @@ Given a target `(package, rule)`, evaluation collects the rules named
 `rule` from **every module in the bundle whose `package` matches**, in
 bundle order, and treats them as one rule set. Then:
 
-1. The first non-default rule whose `body` holds decides. Its `value`
-   is resolved and coerced to a decision; no later rule runs.
-2. If no non-default rule holds, the `default` rule's `value` decides.
+1. Every non-default rule is evaluated. Each one whose `body` holds
+   contributes its `value` (defaulting to boolean `true`).
+2. If the satisfied rules all contribute the same value, that value is
+   the decision. If two contribute *different* values, the result is an
+   error (`-1`), which every caller treats as deny.
+3. If no non-default rule holds, the `default` rule's `value` decides.
    A `default` declared in any module of the package covers the whole
    package -- not just the module it appears in.
-3. If there is neither, the decision is deny.
+4. If there is neither, the decision is deny.
 
 The package-wide part matters. In Rego a package split across files is
 one rule set, so `default allow = false` in one file governs
@@ -89,26 +92,55 @@ OR-ing the results gets this wrong twice: the default would only cover
 its own module, and an early module returning `true` would short-circuit
 past a later module's explicit `"value": false` deny.
 
-Ordering is the contract. A rule that fires wins outright, including
-when its `value` is `false` -- that is how a deny-override rule is
-written:
+The conflict part matters just as much. `allow` is a *complete* rule,
+and OPA rejects a complete rule that produces two outputs at once:
+
+```console
+$ opa eval -d policy.rego -I 'data.authz.allow' <<< '{"tenant":"acme","role":"banned"}'
+{"errors":[{"message":"complete rules must not produce multiple outputs",
+            "code":"eval_conflict_error", ...}]}
+```
+
+Rego does not resolve that by source order, so neither does zopa.
+Picking whichever definition came first in the bundle would make the
+decision depend on file layout -- which carries no meaning in Rego and
+changes when modules are reordered, split, or renamed -- and would let
+zopa answer `allow` where OPA refuses to answer at all.
+
+Definitions that agree are fine, which is what makes the ordinary
+`allow if A` / `allow if B` shape work:
 
 ```json
-{ "type": "modules", "modules": [
-  { "type": "module", "package": "authz", "rules": [
-    { "type": "rule", "name": "allow", "default": true,
-      "value": { "type": "value", "value": true } } ] },
+{ "type": "module", "rules": [
+  { "type": "rule", "name": "allow", "default": true,
+    "value": { "type": "value", "value": false } },
 
-  { "type": "module", "package": "authz", "rules": [
-    { "type": "rule", "name": "allow",
-      "body": [ { "type": "eq",
-        "left":  { "type": "ref", "path": ["input", "user", "role"] },
-        "right": { "type": "value", "value": "banned" } } ],
-      "value": { "type": "value", "value": false } } ] }
+  { "type": "rule", "name": "allow", "body": [ ...A... ] },
+  { "type": "rule", "name": "allow", "body": [ ...B... ] }
 ]}
 ```
 
-Put deny-override rules ahead of the rules they need to override.
+A `default` never conflicts with anything: it is a fallback, not a
+competing definition. So the deny-override shape below is well defined
+no matter where the rules sit, and it is what the `allow_response` and
+`allow_body` phases use:
+
+```json
+{ "type": "module", "rules": [
+  { "type": "rule", "name": "allow_response", "default": true,
+    "value": { "type": "value", "value": true } },
+
+  { "type": "rule", "name": "allow_response",
+    "body": [ { "type": "gte",
+      "left":  { "type": "ref", "path": ["input", "response", "status"] },
+      "right": { "type": "value", "value": 500 } } ],
+    "value": { "type": "value", "value": false } }
+]}
+```
+
+What you cannot do is write two *non-default* rules that disagree and
+expect one of them to win. Express the override against the default
+instead, or narrow the bodies so they cannot both hold.
 
 ## Expressions
 
