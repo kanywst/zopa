@@ -10,6 +10,14 @@
 # are skipped rather than failed: forks, which don't get secrets at all,
 # and Dependabot's, which are a lockfile bump against a pinned SHA -- a
 # review pass there costs tokens to say nothing.
+#
+# One surprise worth knowing about: the action refuses to run when this
+# file differs from the copy on the default branch, and reports it as a
+# pass. So a PR that changes this workflow -- including the one that
+# first adds it -- gets no review, and the job finishes in seconds with
+# a green check. That is upstream's anti-tampering gate, not a
+# misconfiguration; it starts working on the first PR opened after this
+# file lands on main.
 
 name: claude-review
 
