@@ -19,6 +19,15 @@ __pycache__/
 *.log
 *.tmp
 
-# Claude Code / agent state
+# Claude Code / agent state.
+#
+# Everything Claude Code writes into a working tree is local: the
+# project memory file, per-user settings, session state, and MCP
+# server wiring. `.github/workflows/claude-review.yml` is the one
+# Claude-related file that IS tracked -- it runs on GitHub's runner,
+# not from this directory.
 .claude/
+.claude.json
 CLAUDE.md
+CLAUDE.local.md
+.mcp.json
