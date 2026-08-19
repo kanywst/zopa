@@ -1,0 +1,35 @@
+{
+  "name":  "authzen_evaluation",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if {\n\tinput.subject.type == \"user\"\n\tinput.action.name == \"can_read\"\n\tinput.resource.type == \"account\"\n}\n",
+  "cases": [
+    {
+      "input": {
+        "subject":  { "type": "user", "id": "alice@example.com" },
+        "resource": { "type": "account", "id": "123" },
+        "action":   { "name": "can_read", "properties": { "method": "GET" } },
+        "context":  { "time": "1985-10-26T01:22-07:00" }
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "subject":  { "type": "user", "id": "alice@example.com" },
+        "resource": { "type": "account", "id": "123" },
+        "action":   { "name": "can_delete" }
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "subject":  { "type": "service", "id": "svc-1" },
+        "resource": { "type": "account", "id": "123" },
+        "action":   { "name": "can_read" }
+      },
+      "expected": 0
+    },
+    {
+      "input": { "subject": { "type": "user", "id": "alice@example.com" } },
+      "expected": 0
+    }
+  ]
+}
