@@ -1,0 +1,110 @@
+# Automated review pass on every pull request.
+#
+# This is advisory, not a gate: it posts inline comments and a summary,
+# and never blocks a merge. The prompt is deliberately zopa-specific --
+# a generic "review this diff" produces style notes, while the property
+# worth catching here is a change that makes the module fail open,
+# leak across the arena boundary, or grow past its size budget.
+#
+# Requires the repository secret ANTHROPIC_API_KEY. Fork pull requests
+# don't get secrets, so they're skipped rather than failed.
+
+name: claude-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  review:
+    name: claude code review
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      # `secrets` can't be referenced from a job-level `if`, so the
+      # skip decision happens here instead.
+      - name: check for api key
+        id: guard
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+            echo "enabled=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >>"$GITHUB_OUTPUT"
+            echo "ANTHROPIC_API_KEY is not set; skipping review" >&2
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.guard.outputs.enabled == 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: anthropics/claude-code-action@d40ddef4c030e508327d6e35a9c45f3368482c50 # v1
+        if: steps.guard.outputs.enabled == 'true'
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: >-
+            --allowedTools
+            "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(zig build test-unit),Bash(zig build --release=small),Bash(wc:*)"
+          prompt: |
+            Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+
+            zopa is a ~60 KB authorization engine compiled to
+            wasm32-freestanding and loaded as a proxy-wasm filter. It decides
+            whether HTTP requests are allowed. Review it as security-relevant
+            infrastructure, not as an application.
+
+            Read the diff with `gh pr diff`. Leave inline comments on specific
+            lines for concrete findings, then one short summary comment.
+
+            Weight findings by these project invariants, in order:
+
+            1. Fail-closed. Every path that cannot reach a decision must deny.
+               A new `return action_continue`, a swallowed error, an
+               unreachable-looking `orelse`, or a parse failure that lets a
+               request through is the most serious thing you can find here.
+               Truncated or partially-read input counts: deciding on a prefix
+               is a bypass, not a decision.
+            2. Memory ownership. `host_allocator` backs anything crossing the
+               host boundary and is freed by the matching path; the request
+               arena is reset after every evaluation and anything held past
+               that reset dangles. Flag any pointer that crosses between them,
+               and any host buffer obtained without a matching `hostFree`.
+            3. Parser agreement. zopa reads the same bytes as the service
+               behind it. Anywhere the two could disagree -- number grammar,
+               duplicate keys, escapes, encoding -- is a place to smuggle a
+               value past a policy.
+            4. Unchecked arithmetic on host-supplied lengths. `usize` is 32
+               bits on wasm32, so length fields read from a host buffer can
+               wrap. Offsets built from them need `std.math.add` / `mul`.
+            5. Hot-path allocation. Evaluation runs against a reset arena and
+               is expected not to grow linear memory in steady state. Flag
+               new allocations that outlive a request.
+            6. Size budget. The release build is ~60 KB. Call out changes
+               likely to move that materially, and say why.
+
+            Also flag missing test coverage for a behaviour change: unit tests
+            in `src/*.zig`, host-level tests in `test/run.mjs` and
+            `test/run_wasmtime.py`, proxy-wasm behaviour in
+            `examples/envoy/run.sh`, and Rego-facing behaviour in
+            `test/conformance/fixtures/`.
+
+            Do not comment on formatting -- `zig fmt --check` already runs in
+            CI. Do not restate what the diff does. If you find nothing worth
+            reporting, say so in one line.
+
+            Do not add any self-attribution, co-author trailer, or
+            "generated with" line to anything you write.
