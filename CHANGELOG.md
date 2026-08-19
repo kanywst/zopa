@@ -6,6 +6,19 @@ once the first stable tag ships.
 
 ## [Unreleased]
 
+### Changed
+
+- Repository moved from `0-draft/zopa` to `kanywst/zopa`. GitHub
+  redirects the old URL, and `build.zig.zon` never carried the org, so
+  clones and `zig fetch` keep working. Forward-looking references
+  (README badges, `Dockerfile` source label, ROADMAP, the distroless
+  proposal) now point at `kanywst`; entries under released versions
+  keep the paths those releases actually shipped with.
+- `.github/workflows/oci.yml` derives the image name from
+  `$GITHUB_REPOSITORY`, so images built from the next tag publish to
+  `ghcr.io/kanywst/zopa`. The existing `ghcr.io/0-draft/zopa` tags are
+  untouched.
+
 ## [0.2.0] - 2026-05-10
 
 Public surface still alpha. Existing v0.1 policies (single `allow`
@@ -70,7 +83,7 @@ new body and response phases are opt-in via the matching rule
   object iteration, the `Modules` bundle, the two new target-rule
   paths, and the body-deps analyser.
 
-[0.2.0]: https://github.com/0-draft/zopa/releases/tag/v0.2.0
+[0.2.0]: https://github.com/kanywst/zopa/releases/tag/v0.2.0
 
 ## [0.1.0] - 2026-05-07
 
@@ -106,5 +119,5 @@ callback semantics) is still alpha and may change before 1.0.
 
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
-[Unreleased]: https://github.com/0-draft/zopa/compare/v0.2.0...HEAD
-[0.1.0]: https://github.com/0-draft/zopa/releases/tag/v0.1.0
+[Unreleased]: https://github.com/kanywst/zopa/compare/v0.2.0...HEAD
+[0.1.0]: https://github.com/kanywst/zopa/releases/tag/v0.1.0

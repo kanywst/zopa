@@ -34,7 +34,7 @@ RUN zig build --release=small
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /src/zig-out/bin/zopa.wasm /zopa.wasm
 USER nonroot
-LABEL org.opencontainers.image.source="https://github.com/0-draft/zopa"
+LABEL org.opencontainers.image.source="https://github.com/kanywst/zopa"
 LABEL org.opencontainers.image.description="zopa: proxy-wasm authorization engine"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL tech.zopa.proxy-wasm-version="0.2.1"

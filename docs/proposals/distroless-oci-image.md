@@ -31,7 +31,7 @@ evaluation closes the gap.
      hosts that want to confirm the wasm boots before mounting.
 1. CI workflow `.github/workflows/oci.yml`:
    - Builds on `v*` tags and on `main`.
-   - Pushes to `ghcr.io/0-draft/zopa:<tag>` and `:edge`.
+   - Pushes to `ghcr.io/kanywst/zopa:<tag>` and `:edge`.
    - Multi-arch: `linux/amd64`, `linux/arm64`.
    - Cosign keyless signing of the image manifest, attaching the same
      SLSA v1.0 provenance generator already used for the wasm.
@@ -66,7 +66,7 @@ COPY --from=build /src/zig-out/bin/zopa.wasm    /zopa.wasm
 COPY --from=build /src/zig-out/bin/zopa-eval    /usr/local/bin/zopa-eval
 COPY --from=wasmtime /usr/local/bin/wasmtime    /usr/local/bin/wasmtime
 ENTRYPOINT ["/usr/local/bin/zopa-eval"]
-LABEL org.opencontainers.image.source=https://github.com/0-draft/zopa
+LABEL org.opencontainers.image.source=https://github.com/kanywst/zopa
 LABEL tech.zopa.proxy-wasm-version=0.2.1
 ```
 
@@ -96,14 +96,14 @@ for success.)
 
 ## API impact
 
-- New release artifact: OCI image at `ghcr.io/0-draft/zopa`.
+- New release artifact: OCI image at `ghcr.io/kanywst/zopa`.
 - New build target `zopa-eval` (CLI only, not part of the wasm).
 - No change to the wasm exports.
 
 ## Test plan
 
 - CI builds the image on every PR (no push), runs `docker run --rm
-  ghcr.io/0-draft/zopa:edge --version` as a smoke test.
+  ghcr.io/kanywst/zopa:edge --version` as a smoke test.
 - A `tools/verify-image.sh` script that pulls the latest image,
   cosign-verifies it, and runs the smoke test. Used in release
   validation.

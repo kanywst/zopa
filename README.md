@@ -4,8 +4,8 @@ Tiny, zero-allocation authorization engine for proxy-wasm and the edge.
 ~60 KB. No GC. No deps.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![CI](https://github.com/0-draft/zopa/actions/workflows/ci.yml/badge.svg)](https://github.com/0-draft/zopa/actions/workflows/ci.yml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/0-draft/zopa/badge)](https://securityscorecards.dev/viewer/?uri=github.com/0-draft/zopa)
+[![CI](https://github.com/kanywst/zopa/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/zopa/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/kanywst/zopa/badge)](https://securityscorecards.dev/viewer/?uri=github.com/kanywst/zopa)
 [![Zig](https://img.shields.io/badge/zig-0.16.0-orange.svg)](https://ziglang.org)
 
 zopa runs as a `wasm32-freestanding` module. Hosts hand it a request

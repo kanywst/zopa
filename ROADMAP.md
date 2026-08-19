@@ -29,7 +29,7 @@ something here matters to you, open an issue.
   `Module`. `evaluate_addressed(input, ast, package, rule)` wasm
   export dispatches by `(package, rule)`.
 - **Distroless OCI image.** `Dockerfile` + `.github/workflows/oci.yml`
-  publish a multi-arch, cosign-signed image to `ghcr.io/0-draft/zopa`
+  publish a multi-arch, cosign-signed image to `ghcr.io/kanywst/zopa`
   on every tag.
 - **Static body-deps analyser.** `src/body_deps.zig` classifies a
   policy's body usage as `no_body_refs` / `prefix_only` / `full_tree`
