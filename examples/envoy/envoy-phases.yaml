@@ -23,6 +23,7 @@
 # Policy:
 #   allow           always (request phase is not what we're testing)
 #   allow_body      deny when input.body.amount > 1000
+#                   deny when body_raw contains "BLOCKED"
 #   allow_response  deny when the upstream status is 418
 #
 # Upstream routes: /teapot answers 418 so the response rule has
@@ -84,6 +85,21 @@ static_resources:
                                       "type": "gt",
                                       "left": { "type": "ref", "path": ["input", "body", "amount"] },
                                       "right": { "type": "value", "value": 1000 }
+                                    }
+                                  ],
+                                  "value": { "type": "value", "value": false }
+                                },
+                                {
+                                  "type": "rule",
+                                  "name": "allow_body",
+                                  "body": [
+                                    {
+                                      "type": "call",
+                                      "name": "contains",
+                                      "args": [
+                                        { "type": "ref", "path": ["input", "body_raw"] },
+                                        { "type": "value", "value": "BLOCKED" }
+                                      ]
                                     }
                                   ],
                                   "value": { "type": "value", "value": false }

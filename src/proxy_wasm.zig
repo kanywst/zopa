@@ -407,7 +407,12 @@ fn evaluateBody(policy: ast.Modules, body_size: usize, truncated: bool) bool {
     const allocator = arena.allocator();
 
     const cap = @min(body_size, max_body_bytes);
-    const body = readBodyBytes(allocator, cap) catch return false;
+    // A body we were told exists but could not read is a deny, not an
+    // empty body evaluated as if the request carried nothing.
+    const body = readBodyBytes(allocator, cap) catch {
+        logMsg(log_level_warn, "zopa: could not read request body; denying");
+        return false;
+    };
     const input = wire.buildBodyInput(allocator, body, truncated) catch return false;
 
     return decide(arena, input, policy, body_target_rule);
@@ -444,10 +449,17 @@ fn decide(
 // plain slices to `wire.zig`.
 // ---------------------------------------------------------------------------
 
-/// Pull the request body from the host. An error from the host yields
-/// an empty slice rather than a failure, so a policy that only reads
-/// `body_raw` still gets a decision; the caller has already refused
-/// the request if the body actually mattered and we couldn't see it.
+/// Pull the request body from the host.
+///
+/// A host that refuses the read is an error, not an empty body. The two
+/// are indistinguishable downstream -- both produce `body: null,
+/// body_raw: ""` -- and that is a fail-open: a rule watching for a
+/// marker in the body finds nothing in `""` and lets the request
+/// through. The caller turns the error into a deny.
+///
+/// `data_size == 0` with an OK status is a genuinely empty body and is
+/// returned as such, though `proxy_on_request_body` has already skipped
+/// out on `body_size <= 0` before getting here.
 fn readBodyBytes(allocator: std.mem.Allocator, cap: usize) ![]const u8 {
     var data: ?[*]u8 = null;
     var data_size: usize = 0;
@@ -458,9 +470,9 @@ fn readBodyBytes(allocator: std.mem.Allocator, cap: usize) ![]const u8 {
         &data,
         &data_size,
     );
-    if (status != status_ok) return &[_]u8{};
+    if (status != status_ok) return error.BodyUnavailable;
     if (data_size == 0) return &[_]u8{};
-    const ptr = data orelse return &[_]u8{};
+    const ptr = data orelse return error.BodyUnavailable;
     defer memory.hostFree(ptr);
     return try allocator.dupe(u8, ptr[0..data_size]);
 }

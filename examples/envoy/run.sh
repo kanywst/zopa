@@ -183,6 +183,23 @@ check "POST body over the 64 KiB cap -> 403 fail closed" 403 \
     -X POST -H "Content-Type: application/json" \
     --data-binary "@$WORK/oversized.json" "$base/"
 
+check "POST body_raw marker -> 403 raw deny" 403 \
+    -X POST -H "Content-Type: text/plain" \
+    --data 'this payload is BLOCKED' "$base/"
+
+# The marker sits past the 64 KiB cap. Nothing in the prefix matches, so
+# a truncated evaluation would allow it -- and a body-deps walk that only
+# looks for the segment `body` classifies a body_raw-only rule as
+# touching nothing at all, which is how the truncation gate got skipped.
+python3 - "$WORK/raw-oversized.txt" <<'PY2'
+import sys
+with open(sys.argv[1], "w") as f:
+    f.write("x" * 100000 + "BLOCKED")
+PY2
+check "POST body_raw marker past the cap -> 403 fail closed" 403 \
+    -X POST -H "Content-Type: text/plain" \
+    --data-binary "@$WORK/raw-oversized.txt" "$base/"
+
 check "GET /teapot -> 503 response deny" 503 -X GET "$base/teapot"
 
 if (( failed > 0 )); then
