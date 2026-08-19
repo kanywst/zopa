@@ -46,14 +46,28 @@ pub fn analyze(module: ast.Module) BodyDeps {
     return st.finalize();
 }
 
-/// Classify body usage of the rules named `target_rule` across every
-/// module in `bundle`. This is the question the shim actually has:
-/// "does the rule I am about to run for this phase read the body?".
-/// Rules for other phases are irrelevant and would only push the
-/// class up.
-pub fn analyzeTarget(bundle: ast.Modules, target_rule: []const u8) BodyDeps {
+/// Classify body usage of the rules named `target_rule` in
+/// `target_package`. This is the question the shim actually has: "does
+/// the rule I am about to run for this phase read the body?".
+///
+/// Scoped to the package because that is what gets evaluated -- the
+/// shim dispatches into `""`. A bundle that also carries packages for
+/// `evaluate_addressed` callers would otherwise let an unrelated
+/// `allow_body` rule inflate the class for the one that actually runs.
+/// The error direction is safe either way (a too-high class only costs
+/// spurious refusals of oversized bodies, never a bypass), but an
+/// analysis that answers a different question than the one asked drifts
+/// wrong later.
+pub fn analyzeTarget(
+    bundle: ast.Modules,
+    target_package: []const u8,
+    target_rule: []const u8,
+) BodyDeps {
     var st = State{};
-    for (bundle.modules) |module| visitModule(&st, module, target_rule);
+    for (bundle.modules) |module| {
+        if (!std.mem.eql(u8, module.package, target_package)) continue;
+        visitModule(&st, module, target_rule);
+    }
     return st.finalize();
 }
 
@@ -273,9 +287,9 @@ test "analyzeTarget: only the named rule's body refs count" {
     const node = try json.parse(arena.allocator(), policy);
     const bundle = try ast.buildModulesBundle(arena.allocator(), node);
 
-    try testing.expectEqual(Class.no_body_refs, analyzeTarget(bundle, "allow_body").class);
-    try testing.expectEqual(Class.prefix_only, analyzeTarget(bundle, "allow").class);
-    try testing.expectEqual(Class.no_body_refs, analyzeTarget(bundle, "absent").class);
+    try testing.expectEqual(Class.no_body_refs, analyzeTarget(bundle, "", "allow_body").class);
+    try testing.expectEqual(Class.prefix_only, analyzeTarget(bundle, "", "allow").class);
+    try testing.expectEqual(Class.no_body_refs, analyzeTarget(bundle, "", "absent").class);
 }
 
 test "analyzeTarget: refs spread across modules in a bundle are combined" {
@@ -297,7 +311,7 @@ test "analyzeTarget: refs spread across modules in a bundle are combined" {
     defer arena.deinit();
     const node = try json.parse(arena.allocator(), policy);
     const bundle = try ast.buildModulesBundle(arena.allocator(), node);
-    try testing.expectEqual(Class.full_tree, analyzeTarget(bundle, "allow_body").class);
+    try testing.expectEqual(Class.full_tree, analyzeTarget(bundle, "", "allow_body").class);
 }
 
 test "analyze: call with body arg -> prefix_only" {
@@ -306,4 +320,31 @@ test "analyze: call with body arg -> prefix_only" {
         "{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"action\"]}," ++
         "{\"type\":\"value\",\"value\":\"approve_\"}]}";
     try testing.expectEqual(Class.prefix_only, try classify(policy));
+}
+
+test "analyzeTarget: rules in other packages don't inflate the class" {
+    // The shim dispatches into the implicit `""` package, so a bundle
+    // that also carries packages for `evaluate_addressed` callers must
+    // not have their body refs counted against it.
+    const policy =
+        "{\"type\":\"modules\",\"modules\":[" ++
+        "{\"type\":\"module\",\"package\":\"\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow_body\",\"body\":[" ++
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"method\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"POST\"}}]}]}," ++
+        "{\"type\":\"module\",\"package\":\"audit\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow_body\",\"body\":[" ++
+        "{\"type\":\"neq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":null}}]}]}" ++
+        "]}";
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const node = try json.parse(arena.allocator(), policy);
+    const bundle = try ast.buildModulesBundle(arena.allocator(), node);
+
+    try testing.expectEqual(Class.no_body_refs, analyzeTarget(bundle, "", "allow_body").class);
+    try testing.expectEqual(Class.full_tree, analyzeTarget(bundle, "audit", "allow_body").class);
 }

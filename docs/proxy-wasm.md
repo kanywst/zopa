@@ -192,17 +192,17 @@ authorization filter that silently protects nothing.
 
 Every path that cannot reach a decision denies:
 
-| Situation                                       | Result                                    |
-| ----------------------------------------------- | ----------------------------------------- |
-| No policy configured                            | Configure fails                           |
-| Policy does not parse or does not build         | Configure fails                           |
-| Callbacks run with no policy loaded             | 403                                       |
-| Input synthesis fails (host call errors, OOM)   | 403                                       |
-| Host refuses the body read                      | 403                                       |
-| Header map is malformed                         | Headers dropped, rules still have to hold |
-| Body over the 64 KiB cap, policy reads the body | 403                                       |
-| Evaluation returns an error (`-1`)              | 403                                       |
-| Response phase denies                           | 503                                       |
+| Situation                                       | Result                         |
+| ----------------------------------------------- | ------------------------------ |
+| No policy configured                            | Configure fails                |
+| Policy does not parse or does not build         | Configure fails                |
+| Callbacks run with no policy loaded             | 403                            |
+| Input synthesis fails (host call errors, OOM)   | 403                            |
+| Host refuses the body read                      | 403                            |
+| Header map is malformed or unreadable           | 403 (request) / 503 (response) |
+| Body over the 64 KiB cap, policy reads the body | 403                            |
+| Evaluation returns an error (`-1`)              | 403                            |
+| Response phase denies                           | 503                            |
 
 ## Runtime selection
 
