@@ -1,0 +1,67 @@
+{
+  "name":  "03_rbac",
+  "input": {
+    "method": "POST",
+    "path": "/api/v2/orders",
+    "user": {
+      "role": "editor",
+      "perms": ["orders:read", "orders:write", "reports:read", "billing:read"]
+    },
+    "required_perms": ["orders:read", "orders:write"],
+    "headers": {
+      "x-request-id": "01JQ8Z0000000000000000",
+      "user-agent": "curl/8.7.1",
+      "accept": "application/json",
+      "content-type": "application/json"
+    }
+  },
+  "ast": {
+    "type": "module",
+    "rules": [
+      {
+        "type": "rule",
+        "name": "allow",
+        "default": true,
+        "value": { "type": "value", "value": false }
+      },
+      {
+        "type": "rule",
+        "name": "allow",
+        "body": [
+          {
+            "type": "call",
+            "name": "startswith",
+            "args": [
+              { "type": "ref", "path": ["input", "path"] },
+              { "type": "value", "value": "/api/" }
+            ]
+          },
+          {
+            "type": "not",
+            "expr": {
+              "type": "eq",
+              "left":  { "type": "ref", "path": ["input", "user", "role"] },
+              "right": { "type": "value", "value": "suspended" }
+            }
+          },
+          {
+            "type": "every",
+            "var": "required",
+            "source": { "type": "ref", "path": ["input", "required_perms"] },
+            "body": {
+              "type": "some",
+              "var": "granted",
+              "source": { "type": "ref", "path": ["input", "user", "perms"] },
+              "body": {
+                "type": "eq",
+                "left":  { "type": "ref", "path": ["granted"] },
+                "right": { "type": "ref", "path": ["required"] }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "rego": "package authz\n\ndefault allow = false\n\nallow if {\n\tstartswith(input.path, \"/api/\")\n\tinput.user.role != \"suspended\"\n\tevery required in input.required_perms {\n\t\tsome granted in input.user.perms\n\t\tgranted == required\n\t}\n}\n"
+}

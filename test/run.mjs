@@ -672,6 +672,169 @@ check(
   1,
 );
 
+// ---------------------------------------------------------------------------
+// 14. evaluate_addressed: dispatch by (package, rule). The other
+//     suites reach packages only through the implicit `""` default, so
+//     this export was shipped without a single host-side caller.
+// ---------------------------------------------------------------------------
+const { evaluate_addressed } = instance.exports;
+
+function decideAddressed(input, ast, pkg, target) {
+  const i = writeJson(input);
+  const a = writeJson(ast);
+  const p = writeBytes(enc.encode(pkg));
+  const t = writeBytes(enc.encode(target));
+  try {
+    return evaluate_addressed(i.ptr, i.len, a.ptr, a.len, p.ptr, p.len, t.ptr, t.len);
+  } finally {
+    freeBuf(i);
+    freeBuf(a);
+    freeBuf(p);
+    freeBuf(t);
+  }
+}
+
+const addressedPackages = {
+  type: "modules",
+  modules: [
+    {
+      type: "module",
+      package: "authz",
+      rules: [
+        {
+          type: "rule",
+          name: "allow",
+          body: [{ type: "eq", left: refRole, right: { type: "value", value: "admin" } }],
+        },
+      ],
+    },
+    {
+      type: "module",
+      package: "audit",
+      rules: [{ type: "rule", name: "allow", body: [{ type: "value", value: true }] }],
+    },
+  ],
+};
+
+check(
+  'addressed: authz.allow fires for admin',
+  decideAddressed({ user: { role: 'admin' } }, addressedPackages, 'authz', 'allow'),
+  1,
+);
+check(
+  'addressed: authz.allow denies a guest',
+  decideAddressed({ user: { role: 'guest' } }, addressedPackages, 'authz', 'allow'),
+  0,
+);
+check(
+  'addressed: audit.allow fires regardless of role',
+  decideAddressed({ user: { role: 'guest' } }, addressedPackages, 'audit', 'allow'),
+  1,
+);
+check(
+  'addressed: unknown package denies',
+  decideAddressed({ user: { role: 'admin' } }, addressedPackages, 'nope', 'allow'),
+  0,
+);
+check(
+  'addressed: unknown rule denies',
+  decideAddressed({ user: { role: 'admin' } }, addressedPackages, 'authz', 'allow_body'),
+  0,
+);
+
+// ---------------------------------------------------------------------------
+// 15. A package split across modules is one rule set: the `default`
+//     declared in one module governs rules declared in another, and a
+//     later module's explicit deny is not skipped by an earlier match.
+// ---------------------------------------------------------------------------
+const splitPackage = {
+  type: 'modules',
+  modules: [
+    {
+      type: 'module',
+      package: 'authz',
+      rules: [{ type: 'rule', name: 'allow', default: true, value: { type: 'value', value: true } }],
+    },
+    {
+      type: 'module',
+      package: 'authz',
+      rules: [
+        {
+          type: 'rule',
+          name: 'allow',
+          body: [{ type: 'eq', left: refRole, right: { type: 'value', value: 'banned' } }],
+          value: { type: 'value', value: false },
+        },
+      ],
+    },
+  ],
+};
+
+check(
+  'split package: sibling module inherits the default -> allow',
+  decideAddressed({ user: { role: 'viewer' } }, splitPackage, 'authz', 'allow'),
+  1,
+);
+check(
+  'split package: deny rule in the second module still fires',
+  decideAddressed({ user: { role: 'banned' } }, splitPackage, 'authz', 'allow'),
+  0,
+);
+
+// ---------------------------------------------------------------------------
+// 16. Parser agreement with the backend. zopa and the service behind
+//     it read the same bytes, so anywhere the two parsers could
+//     disagree is a place to smuggle a value past a policy.
+// ---------------------------------------------------------------------------
+{
+  // Duplicate keys: Go, JavaScript, and OPA all keep the last one.
+  const dupPolicy = { type: 'eq', left: refRole, right: { type: 'value', value: 'admin' } };
+  const dupBytes = enc.encode('{"user":{"role":"admin","role":"guest"}}');
+  const i = writeBytes(dupBytes);
+  const a = writeJson(dupPolicy);
+  const r = evaluate(i.ptr, i.len, a.ptr, a.len);
+  freeBuf(i);
+  freeBuf(a);
+  check('duplicate input keys resolve last-wins -> deny', r, 0);
+}
+
+for (const bad of ['{"n":01}', '{"n":1.}', '{"n":.5}', '{"n":+1}', '{"n":1e}']) {
+  const i = writeBytes(enc.encode(bad));
+  const a = writeJson({ type: 'value', value: true });
+  const r = evaluate(i.ptr, i.len, a.ptr, a.len);
+  freeBuf(i);
+  freeBuf(a);
+  check(`non-JSON number ${bad} is rejected -> -1`, r, -1);
+}
+
+// ---------------------------------------------------------------------------
+// 17. body_truncated: the shim refuses an oversized body before it
+//     gets here, but the flag is part of the body input shape and a
+//     policy is allowed to key on it directly.
+// ---------------------------------------------------------------------------
+const truncationPolicy = {
+  type: 'module',
+  rules: [
+    { type: 'rule', name: 'allow_body', default: true, value: { type: 'value', value: true } },
+    {
+      type: 'rule',
+      name: 'allow_body',
+      body: [{ type: 'ref', path: ['input', 'body_truncated'] }],
+      value: { type: 'value', value: false },
+    },
+  ],
+};
+check(
+  'body_truncated=true -> policy can deny',
+  decideTarget({ body: null, body_raw: '{"a":1', body_truncated: true }, truncationPolicy, 'allow_body'),
+  0,
+);
+check(
+  'body_truncated=false -> default allows',
+  decideTarget({ body: { a: 1 }, body_raw: '{"a":1}', body_truncated: false }, truncationPolicy, 'allow_body'),
+  1,
+);
+
 if (failed > 0) {
   console.error(`\n${failed} test(s) failed`);
   exit(1);
