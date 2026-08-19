@@ -24,6 +24,8 @@
 #   allow           always (request phase is not what we're testing)
 #   allow_body      deny when input.body.amount > 1000
 #                   deny when body_raw contains "BLOCKED"
+#                   deny when the body is empty (never fires on Envoy --
+#                   see run.sh; the callback isn't invoked without a body)
 #   allow_response  deny when the upstream status is 418
 #
 # Upstream routes: /teapot answers 418 so the response rule has
@@ -100,6 +102,18 @@ static_resources:
                                         { "type": "ref", "path": ["input", "body_raw"] },
                                         { "type": "value", "value": "BLOCKED" }
                                       ]
+                                    }
+                                  ],
+                                  "value": { "type": "value", "value": false }
+                                },
+                                {
+                                  "type": "rule",
+                                  "name": "allow_body",
+                                  "body": [
+                                    {
+                                      "type": "eq",
+                                      "left": { "type": "ref", "path": ["input", "body_raw"] },
+                                      "right": { "type": "value", "value": "" }
                                     }
                                   ],
                                   "value": { "type": "value", "value": false }

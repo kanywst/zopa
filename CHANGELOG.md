@@ -64,6 +64,13 @@ once the first stable tag ships.
   field. `input.body_truncated` deliberately still does not count: a
   policy reading the flag is asking to handle truncation itself, and
   refusing the request first would take that away.
+- **A zero-length body is evaluated instead of skipped.** The body
+  callback returned early on `body_size <= 0`, which skipped
+  `allow_body` and its `default`. Note this was not reachable through
+  Envoy, which does not invoke the callback at all for a request with
+  no body -- pinned by a check in `examples/envoy/run.sh` -- but the
+  early return was wrong for any host that does, and a condition that
+  must hold for every request belongs in `allow` regardless.
 - **A body the host refuses to hand over denies.** `readBodyBytes`
   folded a failed `proxy_get_buffer_bytes` into an empty slice, which
   is indistinguishable downstream from a request that carried no body:

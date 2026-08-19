@@ -21,10 +21,11 @@ A complete policy:
 | `rules`   | Required. List of `Rule` objects.                                                                                    |
 | `package` | Optional. Default `""`. Used by `Modules` bundles (below) to address a specific module via `(package, target_rule)`. |
 
-Evaluation walks every rule whose `name` matches the target rule
-(default `"allow"`), in declaration order, and the first one whose body
-holds decides. See [Rule dispatch](#rule-dispatch) for the exact
-ordering, which matters once a package spans several modules. A bare
+Evaluation runs every rule whose `name` matches the target rule
+(default `"allow"`). Rules that hold and agree on a value produce that
+decision; rules that hold and disagree are a conflict, not a race that
+the earlier one wins. See [Rule dispatch](#rule-dispatch) for the
+details, which matter once a package spans several modules. A bare
 expression at the top level (without `"type": "module"`) is wrapped
 into a synthetic `allow` rule -- handy for tests and small policies.
 

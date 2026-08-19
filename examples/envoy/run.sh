@@ -200,6 +200,17 @@ check "POST body_raw marker past the cap -> 403 fail closed" 403 \
     -X POST -H "Content-Type: text/plain" \
     --data-binary "@$WORK/raw-oversized.txt" "$base/"
 
+# Pins a host limitation, not a zopa decision. The policy has a rule
+# denying an empty body_raw, and it does not fire: Envoy never invokes
+# proxy_on_request_body for a request that carries no body, so the
+# body phase -- default included -- cannot see one. zopa evaluates a
+# zero-length body when the callback does fire, but it cannot make the
+# callback happen. Anything that must hold for every request belongs in
+# the `allow` rule, which runs on headers.
+check "POST with an empty body -> 200 (host skips the body phase)" 200 \
+    -X POST -H "Content-Type: application/json" \
+    --data '' "$base/"
+
 check "GET /teapot -> 503 response deny" 503 -X GET "$base/teapot"
 
 if (( failed > 0 )); then

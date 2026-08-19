@@ -70,6 +70,15 @@ would be deciding on a suffix. Buffering costs latency on multi-chunk
 bodies, which is why the whole callback is gated on an `allow_body`
 rule existing.
 
+**Bodyless requests.** A zero-length body is evaluated like any other:
+returning early would skip `allow_body` entirely, default included, so
+a deny-by-default body policy would allow anything sent with
+`Content-Length: 0`. What zopa cannot do is make the callback happen --
+Envoy does not invoke `proxy_on_request_body` at all for a request that
+carries no body, which `examples/envoy/run.sh` pins with a check. A
+condition that must hold for *every* request belongs in the `allow`
+rule, which fires on headers.
+
 **Oversized bodies.** A body larger than `max_body_bytes` is refused
 with a 403 whenever the policy actually reads the body -- which the
 shim knows from `body_deps.analyzeTarget` at configure time. Reading
