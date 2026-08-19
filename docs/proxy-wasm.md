@@ -72,7 +72,12 @@ rule existing.
 
 **Oversized bodies.** A body larger than `max_body_bytes` is refused
 with a 403 whenever the policy actually reads the body -- which the
-shim knows from `body_deps.analyzeTarget` at configure time. Evaluating
+shim knows from `body_deps.analyzeTarget` at configure time. Reading
+`input.body_raw` counts as reading the body: it is the whole payload as
+a string, so a rule like `contains(input.body_raw, "...")` needs every
+byte just as much as one addressing `input.body.amount`. Reading
+`input.body_truncated` does not count, since a policy keying on the
+flag is asking to handle truncation itself. Evaluating
 the prefix instead would look safe and would not be: a truncated JSON
 body fails to parse, `input.body` becomes null, the deny rule watching
 `input.body.amount` finds nothing to match, and the oversized request
@@ -184,6 +189,7 @@ Every path that cannot reach a decision denies:
 | Policy does not parse or does not build         | Configure fails                           |
 | Callbacks run with no policy loaded             | 403                                       |
 | Input synthesis fails (host call errors, OOM)   | 403                                       |
+| Host refuses the body read                      | 403                                       |
 | Header map is malformed                         | Headers dropped, rules still have to hold |
 | Body over the 64 KiB cap, policy reads the body | 403                                       |
 | Evaluation returns an error (`-1`)              | 403                                       |

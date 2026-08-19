@@ -20,13 +20,14 @@ const std = @import("std");
 const ast = @import("ast.zig");
 
 pub const Class = enum {
-    /// Policy does not reference `input.body` anywhere.
+    /// Policy does not reference the request body anywhere.
     no_body_refs,
     /// Policy references body sub-paths (e.g. `input.body.amount`).
     /// A streaming evaluator can decide as soon as those resolve.
     prefix_only,
-    /// Policy references `input.body` as a whole or iterates over
-    /// the body's contents. The full body must be buffered.
+    /// Policy references `input.body` or `input.body_raw` as a whole,
+    /// or iterates over the body's contents. The full body must be
+    /// buffered.
     full_tree,
 };
 
@@ -94,7 +95,7 @@ fn visit(st: *State, expr: *const ast.Expr) void {
             // visit above marks the path; we promote to whole if
             // the source is itself an `input.body...` ref.
             if (it.source.* == .ref) {
-                if (refTouchesBody(it.source.ref)) st.refs_whole = true;
+                if (classifyRef(it.source.ref) != .none) st.refs_whole = true;
             }
         },
         .call => |c| for (c.args) |arg| visit(st, arg),
@@ -102,31 +103,47 @@ fn visit(st: *State, expr: *const ast.Expr) void {
 }
 
 fn visitRef(st: *State, path: []const []const u8) void {
-    if (!refTouchesBody(path)) return;
-
-    // `input.body` (or just `body`) by itself = whole-tree dependency.
-    // Body sub-paths (input.body.amount, body.user) = prefix-only.
-    const body_index = bodySegmentIndex(path) orelse return;
-    if (body_index + 1 >= path.len) {
-        st.refs_whole = true;
-    } else {
-        st.prefix_count += 1;
+    switch (classifyRef(path)) {
+        .none => {},
+        .whole => st.refs_whole = true,
+        .prefix => st.prefix_count += 1,
     }
 }
 
-fn refTouchesBody(path: []const []const u8) bool {
-    return bodySegmentIndex(path) != null;
-}
+const RefKind = enum {
+    /// Does not reach the request body.
+    none,
+    /// Needs the body in full: `input.body`, or `input.body_raw`, which
+    /// is the entire body as one string.
+    whole,
+    /// Needs a sub-path of the parsed body, e.g. `input.body.amount`.
+    prefix,
+};
 
-/// Locate the `body` segment inside an input ref. Accepts both
-/// `["input", "body", ...]` and the shorthand `["body", ...]`.
-fn bodySegmentIndex(path: []const []const u8) ?usize {
-    if (path.len == 0) return null;
-    if (std.mem.eql(u8, path[0], "body")) return 0;
-    if (path.len >= 2 and std.mem.eql(u8, path[0], "input") and std.mem.eql(u8, path[1], "body")) {
-        return 1;
-    }
-    return null;
+/// Classify an input ref by how much of the request body it needs.
+/// Accepts the `input`-prefixed spelling and the shorthand alike, since
+/// `json.lookupPath` strips one leading `input` segment.
+///
+/// `body_raw` counts. It is a sibling key rather than a sub-path of
+/// `body`, so a walk that only looks for the segment `body` classifies
+/// a policy like `contains(input.body_raw, "...")` as touching nothing
+/// -- and the shim then evaluates it against a truncated prefix, which
+/// is the fail-open this analyser exists to prevent, reached through
+/// the other field.
+///
+/// `body_truncated` deliberately does not count. It is a flag *about*
+/// the body rather than content from it, and a policy reading it is
+/// asking to handle truncation itself; classifying it as a body
+/// reference would make the shim refuse the request before the policy
+/// ever saw the flag.
+fn classifyRef(path: []const []const u8) RefKind {
+    var p = path;
+    if (p.len > 0 and std.mem.eql(u8, p[0], "input")) p = p[1..];
+    if (p.len == 0) return .none;
+
+    if (std.mem.eql(u8, p[0], "body_raw")) return .whole;
+    if (!std.mem.eql(u8, p[0], "body")) return .none;
+    return if (p.len == 1) .whole else .prefix;
 }
 
 const testing = std.testing;
@@ -197,6 +214,41 @@ test "analyze: body shorthand path (no input prefix) detected" {
         "\"left\":{\"type\":\"ref\",\"path\":[\"body\",\"x\"]}," ++
         "\"right\":{\"type\":\"value\",\"value\":1}}";
     try testing.expectEqual(Class.prefix_only, try classify(policy));
+}
+
+test "analyze: body_raw is a whole-body reference" {
+    // A policy whose only body dependency is the raw string still needs
+    // every byte. Classifying it as no_body_refs let the shim evaluate
+    // it against a truncated prefix: `contains(input.body_raw, "X")`
+    // simply returns false when X sat past the buffer cap, and the
+    // request was allowed.
+    const raw =
+        "{\"type\":\"call\",\"name\":\"contains\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"body_raw\"]}," ++
+        "{\"type\":\"value\",\"value\":\"BLOCKED\"}]}";
+    try testing.expectEqual(Class.full_tree, try classify(raw));
+
+    const shorthand =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"body_raw\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"x\"}}";
+    try testing.expectEqual(Class.full_tree, try classify(shorthand));
+}
+
+test "analyze: body_truncated alone is not a body reference" {
+    // The flag is about the body, not from it. Treating it as a body
+    // ref would make the shim refuse an oversized request before the
+    // policy that wanted to handle truncation itself ever ran.
+    const policy = "{\"type\":\"ref\",\"path\":[\"input\",\"body_truncated\"]}";
+    try testing.expectEqual(Class.no_body_refs, try classify(policy));
+}
+
+test "analyze: keys that merely start with `body` are not body refs" {
+    const policy =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"bodyguard\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":1}}";
+    try testing.expectEqual(Class.no_body_refs, try classify(policy));
 }
 
 test "analyzeTarget: only the named rule's body refs count" {

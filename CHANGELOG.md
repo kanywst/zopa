@@ -56,6 +56,19 @@ once the first stable tag ships.
   caller denies on. Definitions that agree are still fine, and a
   `default` never conflicts. Checked against real `opa parse` output in
   `test/conformance/fixtures/10_rule_conflict.json`.
+- **`input.body_raw` counts as reading the body.** `body_deps` only
+  looked for the path segment `body`, so a policy whose sole body
+  dependency was `contains(input.body_raw, "...")` classified as
+  `no_body_refs` and skipped the truncation gate entirely -- the same
+  fail-open the gate exists to close, reached through the sibling
+  field. `input.body_truncated` deliberately still does not count: a
+  policy reading the flag is asking to handle truncation itself, and
+  refusing the request first would take that away.
+- **A body the host refuses to hand over denies.** `readBodyBytes`
+  folded a failed `proxy_get_buffer_bytes` into an empty slice, which
+  is indistinguishable downstream from a request that carried no body:
+  a rule watching for a marker found nothing in `""` and let the
+  request through.
 - `free(0)` no longer reads a length prefix from below address zero;
   the export takes a nullable pointer and ignores null.
 - `body_deps.zig` is actually wired into the shim. Its doc comment
