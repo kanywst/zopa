@@ -1,10 +1,16 @@
 //! Static analysis of body dependencies in a compiled policy.
 //!
 //! Walks the AST once, classifying how the policy references the
-//! request body. The proxy-wasm shim uses the result to decide
-//! whether to skip `proxy_on_request_body` entirely (no body refs),
-//! buffer until specific paths resolve (prefix-only), or buffer the
-//! whole body up to `max_body_bytes` (full-tree).
+//! request body. `proxy_wasm.zig` runs `analyzeTarget` over the
+//! `allow_body` rules at configure time and keeps the class around for
+//! two decisions on the hot path:
+//!
+//! - `.no_body_refs`: the body rule never reads the body, so a body
+//!   that got truncated at the buffer cap changes nothing.
+//! - `.prefix_only` / `.full_tree`: the decision depends on bytes we
+//!   may not have. A truncated body is refused rather than evaluated
+//!   against a prefix, because "the parse failed so the deny rule
+//!   didn't fire" is a bypass, not a decision.
 //!
 //! Streaming evaluation itself (per `docs/proposals/streaming-evaluation.md`)
 //! depends on the body-aware callback path landing first; this
@@ -35,11 +41,29 @@ pub const BodyDeps = struct {
 /// Conservative: when in doubt, returns `.full_tree`.
 pub fn analyze(module: ast.Module) BodyDeps {
     var st = State{};
-    for (module.rules) |rule| {
-        for (rule.body) |expr| visit(&st, expr);
-        if (rule.value) |v| visit(&st, v);
-    }
+    visitModule(&st, module, null);
     return st.finalize();
+}
+
+/// Classify body usage of the rules named `target_rule` across every
+/// module in `bundle`. This is the question the shim actually has:
+/// "does the rule I am about to run for this phase read the body?".
+/// Rules for other phases are irrelevant and would only push the
+/// class up.
+pub fn analyzeTarget(bundle: ast.Modules, target_rule: []const u8) BodyDeps {
+    var st = State{};
+    for (bundle.modules) |module| visitModule(&st, module, target_rule);
+    return st.finalize();
+}
+
+fn visitModule(st: *State, module: ast.Module, target_rule: ?[]const u8) void {
+    for (module.rules) |rule| {
+        if (target_rule) |want| {
+            if (!std.mem.eql(u8, rule.name, want)) continue;
+        }
+        for (rule.body) |expr| visit(st, expr);
+        if (rule.value) |v| visit(st, v);
+    }
 }
 
 const State = struct {
@@ -173,6 +197,55 @@ test "analyze: body shorthand path (no input prefix) detected" {
         "\"left\":{\"type\":\"ref\",\"path\":[\"body\",\"x\"]}," ++
         "\"right\":{\"type\":\"value\",\"value\":1}}";
     try testing.expectEqual(Class.prefix_only, try classify(policy));
+}
+
+test "analyzeTarget: only the named rule's body refs count" {
+    // `allow` reads the body; `allow_body` doesn't. Asking about
+    // `allow_body` must not inherit `allow`'s dependency, or every
+    // body would be treated as decision-relevant.
+    const policy =
+        "{\"type\":\"modules\",\"modules\":[" ++
+        "{\"type\":\"module\",\"package\":\"\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow\",\"body\":[" ++
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"x\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":1}}]}," ++
+        "{\"type\":\"rule\",\"name\":\"allow_body\",\"body\":[" ++
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"method\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"POST\"}}]}]}" ++
+        "]}";
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const node = try json.parse(arena.allocator(), policy);
+    const bundle = try ast.buildModulesBundle(arena.allocator(), node);
+
+    try testing.expectEqual(Class.no_body_refs, analyzeTarget(bundle, "allow_body").class);
+    try testing.expectEqual(Class.prefix_only, analyzeTarget(bundle, "allow").class);
+    try testing.expectEqual(Class.no_body_refs, analyzeTarget(bundle, "absent").class);
+}
+
+test "analyzeTarget: refs spread across modules in a bundle are combined" {
+    const policy =
+        "{\"type\":\"modules\",\"modules\":[" ++
+        "{\"type\":\"module\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow_body\",\"body\":[" ++
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"method\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"POST\"}}]}]}," ++
+        "{\"type\":\"module\",\"rules\":[" ++
+        "{\"type\":\"rule\",\"name\":\"allow_body\",\"body\":[" ++
+        "{\"type\":\"neq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":null}}]}]}" ++
+        "]}";
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const node = try json.parse(arena.allocator(), policy);
+    const bundle = try ast.buildModulesBundle(arena.allocator(), node);
+    try testing.expectEqual(Class.full_tree, analyzeTarget(bundle, "allow_body").class);
 }
 
 test "analyze: call with body arg -> prefix_only" {

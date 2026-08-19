@@ -5,8 +5,9 @@
 //! `proxy_on_request_body`, `proxy_on_response_headers`,
 //! `proxy_on_done`. Request headers fire the "allow" target rule;
 //! request body fires "allow_body" with `{"body": <parsed-json>,
-//! "body_raw": <string>}` once the host signals end of stream;
-//! response headers fire "allow_response" with `{"response":{...}}`.
+//! "body_raw": <string>, "body_truncated": <bool>}` once the host
+//! signals end of stream; response headers fire "allow_response" with
+//! `{"response":{...}}`.
 //!
 //! Configuration: the policy AST JSON arrives via
 //! `proxy_on_configure`. We copy it into `host_allocator` so it
@@ -15,12 +16,24 @@
 //! Memory: host-supplied buffers (header values, header pairs, body
 //! bytes, configuration bytes) are allocated by the host calling our
 //! `malloc`. We `hostFree` them once consumed.
+//!
+//! Failure posture: every path that can't reach a decision denies.
+//! No policy, a policy that won't parse, a host call that errors, a
+//! body we could only see part of -- all of them are a 403, never a
+//! pass-through. An authorization filter that fails open is worse
+//! than no filter, because the deployment believes it is protected.
+//!
+//! This file is deliberately thin. Anything that can run without a
+//! wasm host -- header-map decoding, input synthesis -- lives in
+//! `wire.zig`, where the unit tests can reach it.
 
 const std = @import("std");
 const ast = @import("ast.zig");
+const body_deps = @import("body_deps.zig");
 const eval = @import("eval.zig");
 const json = @import("json.zig");
 const memory = @import("memory.zig");
+const wire = @import("wire.zig");
 
 // ABI version negotiation: one empty export per supported version.
 
@@ -45,6 +58,23 @@ const action_pause: i32 = 1;
 
 /// Lifecycle callbacks return `1` for success in proxy-wasm.
 const result_ok: i32 = 1;
+const result_failed: i32 = 0;
+
+// Log levels (proxy-wasm 0.2.1).
+
+const log_level_warn: i32 = 3;
+const log_level_error: i32 = 4;
+
+// Target rule per phase. Disjoint names let one bundled policy carry
+// rules for all three.
+const request_target_rule: []const u8 = eval.default_target_rule;
+const body_target_rule: []const u8 = "allow_body";
+const response_target_rule: []const u8 = "allow_response";
+
+/// Ceiling on how much request body we ask the host for. A policy
+/// that reads the body and hits this cap denies -- see
+/// `proxy_on_request_body`.
+const max_body_bytes: usize = 64 * 1024;
 
 // Host imports.
 
@@ -96,10 +126,28 @@ const empty_ptr: [*]const u8 = @ptrFromInt(1);
 
 // Module-global state. proxy-wasm runs one VM per thread, so a
 // plain global is safe.
+//
+// Known limitation: the root context id passed to `proxy_on_configure`
+// is ignored, so a VM shared by two filter configurations keeps only
+// the last policy. Envoy gives each `vm_config` its own VM unless
+// `vm_id` is set explicitly, so the common deployment is unaffected;
+// sharing a `vm_id` across filters with different policies is not
+// supported. Tracked in ROADMAP.md.
 
-var configured_policy: ?[]u8 = null;
+/// Owns the policy bytes and the AST built from them. Separate from
+/// the request arena because it has to survive every reset; separate
+/// from raw `host_allocator` calls because the AST is a tree of small
+/// nodes that would otherwise have to be walked to be freed. Replaced
+/// wholesale on reconfigure.
+var policy_arena: ?std.heap.ArenaAllocator = null;
 
-// Pre-flight flags computed at configure time so the body / response
+/// The compiled policy. Built once at configure time, so the
+/// per-request path is `json.parse(input)` plus the rule walk -- no
+/// policy parse, no AST construction. On a realistic RBAC policy that
+/// is most of the evaluation cost.
+var compiled_policy: ?ast.Modules = null;
+
+// Pre-flight facts computed at configure time so the body / response
 // callbacks can short-circuit without paying the eval cost when the
 // policy doesn't carry rules for those phases. Also preserves v0.1
 // behaviour for users who only authored an `allow` rule: a missing
@@ -112,14 +160,26 @@ var configured_policy: ?[]u8 = null;
 var has_allow_body: bool = false;
 var has_allow_response: bool = false;
 
+/// Whether the `allow_body` rules actually read the body. Set at
+/// configure time from `body_deps.analyzeTarget`; decides whether a
+/// truncated body is a problem.
+var body_class: body_deps.Class = .no_body_refs;
+
 // Lifecycle exports.
 
 export fn proxy_on_vm_start(_: i32, _: i32) i32 {
     return result_ok;
 }
 
+/// Load the policy. Failing here is deliberate and loud: Envoy will
+/// refuse to instantiate the filter, which (with the default
+/// `fail_open: false`) means requests get a 503 instead of quietly
+/// flowing through an authorization filter that holds no policy.
 export fn proxy_on_configure(_: i32, configuration_size: i32) i32 {
-    if (configuration_size <= 0) return result_ok;
+    if (configuration_size <= 0) {
+        logMsg(log_level_error, "zopa: no policy in plugin configuration; refusing to start");
+        return result_failed;
+    }
 
     var data: ?[*]u8 = null;
     var data_size: usize = 0;
@@ -130,43 +190,72 @@ export fn proxy_on_configure(_: i32, configuration_size: i32) i32 {
         &data,
         &data_size,
     );
-    if (status != status_ok) return 0;
+    if (status != status_ok) {
+        logMsg(log_level_error, "zopa: could not read plugin configuration");
+        return result_failed;
+    }
 
-    const ptr = data orelse return 0;
+    const ptr = data orelse {
+        logMsg(log_level_error, "zopa: plugin configuration buffer was null");
+        return result_failed;
+    };
     defer if (data_size > 0) memory.hostFree(ptr);
 
-    if (configured_policy) |old| memory.host_allocator.free(old);
-    configured_policy = memory.host_allocator.dupe(u8, ptr[0..data_size]) catch {
-        configured_policy = null;
-        return 0;
-    };
+    if (!compilePolicy(ptr[0..data_size])) {
+        logMsg(log_level_error, "zopa: policy is not a valid AST; refusing to start");
+        return result_failed;
+    }
 
-    scanPhaseRules(configured_policy.?);
     return result_ok;
 }
 
-/// Parse the policy bundle once at configure time and record which
-/// phase target rules (`allow_body`, `allow_response`) actually exist
-/// across every module. The request arena is empty here -- it's
-/// reused as scratch space and reset on the way out so the per-
-/// request hot path is unaffected.
-fn scanPhaseRules(policy: []const u8) void {
-    has_allow_body = false;
-    has_allow_response = false;
+/// Copy, parse, and build the policy onto a fresh long-lived arena,
+/// then record what the hot path needs to know: which phase target
+/// rules exist, and whether the body rules read the body.
+///
+/// Returns false without touching the loaded policy if anything fails.
+/// Failing configuration is better than accepting a policy that will
+/// deny every request at runtime for a reason nobody can see, and
+/// building the replacement before discarding the old arena means a bad
+/// reconfigure can't strand a healthy filter with nothing loaded.
+fn compilePolicy(policy_bytes: []const u8) bool {
+    var arena = std.heap.ArenaAllocator.init(memory.host_allocator);
 
-    const arena = memory.requestArena();
-    defer memory.resetRequestArena();
+    // Not `errdefer`: this function reports failure as `false`, not as
+    // an error, so `errdefer` would never fire and every rejected
+    // policy would leak its arena.
+    var adopted = false;
+    defer if (!adopted) arena.deinit();
+
     const allocator = arena.allocator();
 
-    const ast_value = json.parse(allocator, policy) catch return;
-    const bundle = ast.buildModulesBundle(allocator, ast_value) catch return;
+    // The AST aliases the policy bytes for every string, so the copy
+    // has to live on the same arena as the nodes pointing into it.
+    const policy = allocator.dupe(u8, policy_bytes) catch return false;
+    const ast_value = json.parse(allocator, policy) catch return false;
+    const bundle = ast.buildModulesBundle(allocator, ast_value) catch return false;
 
+    var body_rules = false;
+    var response_rules = false;
     for (bundle.modules) |module| {
         for (module.rules) |rule| {
-            if (std.mem.eql(u8, rule.name, "allow_body")) has_allow_body = true;
-            if (std.mem.eql(u8, rule.name, "allow_response")) has_allow_response = true;
+            if (std.mem.eql(u8, rule.name, body_target_rule)) body_rules = true;
+            if (std.mem.eql(u8, rule.name, response_target_rule)) response_rules = true;
         }
     }
+
+    if (policy_arena) |*old| old.deinit();
+    policy_arena = arena;
+    adopted = true;
+    compiled_policy = bundle;
+    has_allow_body = body_rules;
+    has_allow_response = response_rules;
+    body_class = if (body_rules)
+        body_deps.analyzeTarget(bundle, body_target_rule).class
+    else
+        .no_body_refs;
+
+    return true;
 }
 
 export fn proxy_on_context_create(_: i32, _: i32) void {}
@@ -178,23 +267,50 @@ export fn proxy_on_context_create(_: i32, _: i32) void {}
 /// own input shapes -- the three phases use disjoint target rules
 /// so a single bundled policy can carry rules for each.
 ///
+/// A deny returns `Pause`, not `Continue`. `proxy_send_local_response`
+/// already ends the stream, and every proxy-wasm SDK's auth example
+/// stops iteration afterwards; returning `Continue` asks the host to
+/// keep running the filter chain on a request that has been answered.
+///
 /// Hosts clear `:method` / `:path` from the header map before
 /// `proxy_on_request_body` fires, so a body rule that needs request
 /// context still requires per-context snapshot plumbing. That is
 /// tracked in `docs/proposals/body-aware-policies.md` § "v2".
 export fn proxy_on_request_headers(_: i32, _: i32, _: i32) i32 {
-    const policy = configured_policy orelse return action_continue;
-    if (!evaluateAt(map_type_request_headers, null, policy)) {
+    const policy = compiled_policy orelse {
+        // Unreachable in a healthy deployment -- `proxy_on_configure`
+        // refuses to start without a policy -- but if a host runs the
+        // callbacks anyway, deny.
+        logMsg(log_level_error, "zopa: request with no policy loaded; denying");
         denyWithStatus(403);
+        return action_pause;
+    };
+
+    if (!evaluateRequest(policy)) {
+        denyWithStatus(403);
+        return action_pause;
     }
     return action_continue;
 }
 
 /// Evaluate against the request body under the `allow_body` target
-/// rule, once the host signals end of stream. Until then we return
-/// `Continue` so streaming chunks pass through; the final fragment
-/// triggers the eval. Body input shape is
-/// `{"body": <parsed-or-null>, "body_raw": <string>}`.
+/// rule, once the host signals end of stream.
+///
+/// Non-final chunks return `StopIterationAndBuffer` rather than
+/// `Continue`. That is the only way the host accumulates the body:
+/// with `Continue`, each chunk is forwarded upstream as it arrives and
+/// the buffer visible at end of stream holds just the last fragment,
+/// so a policy reading `input.body.amount` on a body split across two
+/// TCP segments was deciding on a suffix. Buffering costs latency on
+/// bodies that span chunks, which is why the whole callback is gated
+/// on the policy actually having an `allow_body` rule.
+///
+/// A body larger than `max_body_bytes` is refused outright when the
+/// policy reads the body. The alternative -- evaluate the prefix --
+/// looks safe and isn't: a truncated JSON body fails to parse, `body`
+/// becomes null, the deny rule that was watching `input.body.amount`
+/// finds nothing to match, and the oversized request is allowed
+/// through. Sending a big body would be a one-line bypass.
 ///
 /// Hosts clear `:method` / `:path` from the header map by the time
 /// this fires (Envoy/wamr behaviour), so a body rule that needs
@@ -204,33 +320,134 @@ export fn proxy_on_request_body(_: i32, body_size: i32, end_of_stream: i32) i32 
     // Skip cheaply when the policy doesn't have an `allow_body` rule,
     // mirroring v0.1.0 behaviour where this callback was a no-op.
     if (!has_allow_body) return action_continue;
-    if (end_of_stream == 0) return action_continue;
+    if (end_of_stream == 0) return action_pause;
     if (body_size <= 0) return action_continue;
-    const policy = configured_policy orelse return action_continue;
-    if (!evaluateBodyAt(@intCast(body_size), policy)) {
+
+    const policy = compiled_policy orelse {
+        denyWithStatus(403);
+        return action_pause;
+    };
+
+    const size: usize = @intCast(body_size);
+    const truncated = size > max_body_bytes;
+    if (truncated and body_class != .no_body_refs) {
+        logMsg(log_level_warn, "zopa: request body exceeds buffer cap; denying");
+        denyWithStatus(403);
+        return action_pause;
+    }
+
+    if (!evaluateBody(policy, size, truncated)) {
         denyWithStatus(403);
         return action_pause;
     }
     return action_continue;
 }
 
-const body_target_rule: []const u8 = "allow_body";
-const max_body_bytes: usize = 64 * 1024;
+/// Evaluate against response status + headers under the
+/// `allow_response` target rule. Deny replaces the response with a
+/// 503; allow lets the upstream response through unchanged.
+///
+/// This one returns `Continue` after the local response: on the
+/// encode path Envoy has already committed to a response, and
+/// stopping iteration there strands the stream rather than replacing
+/// it.
+///
+/// Request-side policy targeting "allow" runs in
+/// `proxy_on_request_headers`; the phases use disjoint target rules
+/// so a single bundled policy can carry all of them.
+export fn proxy_on_response_headers(_: i32, _: i32, _: i32) i32 {
+    // Skip cheaply when the policy doesn't have an `allow_response`
+    // rule. Without this gate every response would be replaced with
+    // a 503 for any policy that only carried request-side rules.
+    if (!has_allow_response) return action_continue;
 
-fn evaluateBodyAt(body_size: usize, policy: []const u8) bool {
+    const policy = compiled_policy orelse {
+        denyWithStatus(503);
+        return action_continue;
+    };
+
+    if (!evaluateResponse(policy)) {
+        denyWithStatus(503);
+    }
+    return action_continue;
+}
+
+export fn proxy_on_done(_: i32) i32 {
+    return result_ok;
+}
+
+// ---------------------------------------------------------------------------
+// Per-phase evaluation. Each one builds its input on the request arena
+// and resets it on the way out, so an error path leaves nothing behind.
+// Errors fold into deny -- never default to allow on failure.
+// ---------------------------------------------------------------------------
+
+fn evaluateRequest(policy: ast.Modules) bool {
     const arena = memory.requestArena();
     defer memory.resetRequestArena();
     const allocator = arena.allocator();
 
-    const cap = if (body_size > max_body_bytes) max_body_bytes else body_size;
-    const body_bytes = readBodyBytes(allocator, cap) catch return false;
-    const input_bytes = buildBodyInput(allocator, body_bytes) catch return false;
-    return eval.evaluateWithTarget(arena, input_bytes, policy, body_target_rule) catch false;
+    const method = readSingleHeader(allocator, map_type_request_headers, ":method") catch return false;
+    const path = readSingleHeader(allocator, map_type_request_headers, ":path") catch return false;
+    const headers = readAllHeaders(allocator, map_type_request_headers);
+
+    const input = wire.buildRequestInput(
+        allocator,
+        method orelse "",
+        path orelse "",
+        headers,
+    ) catch return false;
+
+    return decide(arena, input, policy, request_target_rule);
 }
 
-/// Pull the request body from the host. Returns an empty slice on
-/// host error so the caller sees a body of "" rather than failing
-/// the request outright.
+fn evaluateBody(policy: ast.Modules, body_size: usize, truncated: bool) bool {
+    const arena = memory.requestArena();
+    defer memory.resetRequestArena();
+    const allocator = arena.allocator();
+
+    const cap = @min(body_size, max_body_bytes);
+    const body = readBodyBytes(allocator, cap) catch return false;
+    const input = wire.buildBodyInput(allocator, body, truncated) catch return false;
+
+    return decide(arena, input, policy, body_target_rule);
+}
+
+fn evaluateResponse(policy: ast.Modules) bool {
+    const arena = memory.requestArena();
+    defer memory.resetRequestArena();
+    const allocator = arena.allocator();
+
+    const status = readSingleHeader(allocator, map_type_response_headers, ":status") catch return false;
+    const headers = readAllHeaders(allocator, map_type_response_headers);
+
+    const input = wire.buildResponseInput(allocator, status orelse "", headers) catch return false;
+
+    return decide(arena, input, policy, response_target_rule);
+}
+
+/// Every phase dispatches into the implicit `""` package: a
+/// proxy-wasm filter carries one policy and selects the rule by phase,
+/// not by package. Multi-package addressing is a host-driven feature
+/// and goes through the `evaluate_addressed` export instead.
+fn decide(
+    arena: *std.heap.ArenaAllocator,
+    input: []const u8,
+    policy: ast.Modules,
+    target_rule: []const u8,
+) bool {
+    return eval.evaluateCompiled(arena, input, policy, "", target_rule) catch false;
+}
+
+// ---------------------------------------------------------------------------
+// Host reads. These own the malloc/free dance with the host and hand
+// plain slices to `wire.zig`.
+// ---------------------------------------------------------------------------
+
+/// Pull the request body from the host. An error from the host yields
+/// an empty slice rather than a failure, so a policy that only reads
+/// `body_raw` still gets a decision; the caller has already refused
+/// the request if the body actually mattered and we couldn't see it.
 fn readBodyBytes(allocator: std.mem.Allocator, cap: usize) ![]const u8 {
     var data: ?[*]u8 = null;
     var data_size: usize = 0;
@@ -246,166 +463,6 @@ fn readBodyBytes(allocator: std.mem.Allocator, cap: usize) ![]const u8 {
     const ptr = data orelse return &[_]u8{};
     defer memory.hostFree(ptr);
     return try allocator.dupe(u8, ptr[0..data_size]);
-}
-
-/// Build `{"body": <parsed-json-or-null>, "body_raw": <string>}`. We
-/// try to parse the body as JSON; if it fails, `body` is null and
-/// the policy can still match against `body_raw` (e.g. with the
-/// `contains` builtin). The parsed copy is dropped on the next
-/// arena reset, so this only costs one transient walk.
-fn buildBodyInput(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
-    const parsed_ok = blk: {
-        _ = json.parse(allocator, body) catch break :blk false;
-        break :blk true;
-    };
-
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-
-    try buf.appendSlice(allocator, "{\"body\":");
-    if (parsed_ok and body.len > 0) {
-        try buf.appendSlice(allocator, body);
-    } else {
-        try buf.appendSlice(allocator, "null");
-    }
-    try buf.appendSlice(allocator, ",\"body_raw\":");
-    try appendJsonString(allocator, &buf, body);
-    try buf.append(allocator, '}');
-
-    return try allocator.dupe(u8, buf.items);
-}
-
-/// Evaluate against response status + headers under the
-/// `allow_response` target rule. Deny replaces the response with a
-/// 503; allow lets the upstream response through unchanged.
-///
-/// Request-side policy targeting "allow" runs in
-/// `proxy_on_request_headers`; the two phases use disjoint target
-/// rules so a single bundled policy can carry both.
-export fn proxy_on_response_headers(_: i32, _: i32, _: i32) i32 {
-    // Skip cheaply when the policy doesn't have an `allow_response`
-    // rule. Without this gate every response would be replaced with
-    // a 503 for any policy that only carried request-side rules.
-    if (!has_allow_response) return action_continue;
-    const policy = configured_policy orelse return action_continue;
-    if (!evaluateResponseAt(policy)) {
-        denyWithStatus(503);
-    }
-    return action_continue;
-}
-
-const response_target_rule: []const u8 = "allow_response";
-
-fn evaluateResponseAt(policy: []const u8) bool {
-    const arena = memory.requestArena();
-    defer memory.resetRequestArena();
-    const allocator = arena.allocator();
-
-    const input_bytes = buildResponseInput(allocator) catch return false;
-    return eval.evaluateWithTarget(arena, input_bytes, policy, response_target_rule) catch false;
-}
-
-/// Build `{"response":{"status":<int>,"headers":{...}}}` from the
-/// response header map. `:status` is fetched individually for the
-/// same wamr-host reasons that drive the request-side path.
-fn buildResponseInput(allocator: std.mem.Allocator) ![]u8 {
-    const status_str = (try readSingleHeader(allocator, map_type_response_headers, ":status")) orelse "";
-    const headers = readAllHeaders(allocator, map_type_response_headers) catch &[_]HeaderPair{};
-
-    const status_num = std.fmt.parseInt(i32, status_str, 10) catch -1;
-
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-
-    try buf.appendSlice(allocator, "{\"response\":{\"status\":");
-    if (status_num < 0) {
-        try buf.appendSlice(allocator, "null");
-    } else {
-        var num_buf: [16]u8 = undefined;
-        const slice = std.fmt.bufPrint(&num_buf, "{d}", .{status_num}) catch unreachable;
-        try buf.appendSlice(allocator, slice);
-    }
-
-    try buf.appendSlice(allocator, ",\"headers\":{");
-    var first = true;
-    for (headers) |h| {
-        if (h.key.len > 0 and h.key[0] == ':') continue;
-        if (!first) try buf.append(allocator, ',');
-        first = false;
-        try appendJsonString(allocator, &buf, h.key);
-        try buf.append(allocator, ':');
-        try appendJsonString(allocator, &buf, h.value);
-    }
-    try buf.appendSlice(allocator, "}}}");
-
-    return try allocator.dupe(u8, buf.items);
-}
-
-export fn proxy_on_done(_: i32) i32 {
-    return result_ok;
-}
-
-// Helpers.
-
-/// Build an input from a header map (optionally with a body) and run
-/// `eval.evaluate`. Errors fold into deny -- never default to allow
-/// on failure.
-fn evaluateAt(map_type: i32, body: ?[]const u8, policy: []const u8) bool {
-    const arena = memory.requestArena();
-    defer memory.resetRequestArena();
-    const allocator = arena.allocator();
-
-    const input_bytes = buildHeadersInput(allocator, map_type, body) catch return false;
-    return eval.evaluate(arena, input_bytes, policy) catch false;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers: input synthesis
-// ---------------------------------------------------------------------------
-
-const HeaderPair = struct { key: []const u8, value: []const u8 };
-
-/// Build the input JSON: `method`, `path`, `headers`, optional
-/// `body`. `:method` and `:path` are fetched individually because
-/// Envoy with the wamr runtime omits pseudo-headers from
-/// `proxy_get_header_map_pairs`.
-fn buildHeadersInput(
-    allocator: std.mem.Allocator,
-    map_type: i32,
-    body: ?[]const u8,
-) ![]u8 {
-    const method = (try readSingleHeader(allocator, map_type, ":method")) orelse "";
-    const path = (try readSingleHeader(allocator, map_type, ":path")) orelse "";
-    const headers = readAllHeaders(allocator, map_type) catch &[_]HeaderPair{};
-
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-
-    try buf.appendSlice(allocator, "{\"method\":");
-    try appendJsonString(allocator, &buf, method);
-    try buf.appendSlice(allocator, ",\"path\":");
-    try appendJsonString(allocator, &buf, path);
-
-    try buf.appendSlice(allocator, ",\"headers\":{");
-    var first = true;
-    for (headers) |h| {
-        // Skip pseudo-headers; we already promoted those.
-        if (h.key.len > 0 and h.key[0] == ':') continue;
-        if (!first) try buf.append(allocator, ',');
-        first = false;
-        try appendJsonString(allocator, &buf, h.key);
-        try buf.append(allocator, ':');
-        try appendJsonString(allocator, &buf, h.value);
-    }
-    try buf.append(allocator, '}');
-
-    if (body) |b| {
-        try buf.appendSlice(allocator, ",\"body\":");
-        try appendJsonString(allocator, &buf, b);
-    }
-
-    try buf.append(allocator, '}');
-    return try allocator.dupe(u8, buf.items);
 }
 
 /// Read one header value. `null` for missing keys (distinct from
@@ -432,91 +489,25 @@ fn readSingleHeader(
     return try allocator.dupe(u8, ptr[0..data_size]);
 }
 
-/// Decode the proxy-wasm header-map serialisation:
-///
-/// ```text
-///   u32_le N
-///   (u32_le key_size, u32_le value_size) * N
-///   (key, NUL, value, NUL) * N
-/// ```
-fn readAllHeaders(allocator: std.mem.Allocator, map_type: i32) ![]HeaderPair {
+/// Read and decode the whole header map. A host error or a malformed
+/// buffer yields no headers: the pseudo-headers a policy usually keys
+/// on are fetched separately, and an unreadable map should not by
+/// itself decide the request. The rules still have to hold.
+fn readAllHeaders(allocator: std.mem.Allocator, map_type: i32) []const wire.HeaderPair {
     var data: ?[*]u8 = null;
     var data_size: usize = 0;
     const status = proxy_get_header_map_pairs(map_type, &data, &data_size);
-    if (status != status_ok) return &[_]HeaderPair{};
-    if (data_size == 0) return &[_]HeaderPair{};
-    const ptr = data orelse return &[_]HeaderPair{};
+    if (status != status_ok) return &[_]wire.HeaderPair{};
+    if (data_size == 0) return &[_]wire.HeaderPair{};
+    const ptr = data orelse return &[_]wire.HeaderPair{};
     defer memory.hostFree(ptr);
 
-    if (data_size < 4) return error.InvalidHeaderMap;
-    const buf = ptr[0..data_size];
-
-    const num = std.mem.readInt(u32, buf[0..4], .little);
-    if (num == 0) return &[_]HeaderPair{};
-
-    // Checked arithmetic: on wasm32 `usize` is 32 bits, so a
-    // sufficiently large `num` (or per-entry size) read from the
-    // host buffer can wrap and bypass the bounds check below.
-    const sizes_off: usize = 4;
-    const sizes_len = std.math.mul(usize, num, 8) catch return error.InvalidHeaderMap;
-    const sizes_end = std.math.add(usize, sizes_off, sizes_len) catch return error.InvalidHeaderMap;
-    if (buf.len < sizes_end) return error.InvalidHeaderMap;
-
-    var headers = try allocator.alloc(HeaderPair, num);
-    var p: usize = sizes_end;
-    var i: usize = 0;
-    while (i < num) : (i += 1) {
-        const so = sizes_off + i * 8;
-        const key_size = std.mem.readInt(u32, buf[so .. so + 4][0..4], .little);
-        const value_size = std.mem.readInt(u32, buf[so + 4 .. so + 8][0..4], .little);
-
-        // (key_size + 1) + (value_size + 1), guarded.
-        const kv = std.math.add(usize, key_size, value_size) catch return error.InvalidHeaderMap;
-        const need = std.math.add(usize, kv, 2) catch return error.InvalidHeaderMap;
-        const end = std.math.add(usize, p, need) catch return error.InvalidHeaderMap;
-        if (end > buf.len) return error.InvalidHeaderMap;
-
-        const key = try allocator.dupe(u8, buf[p .. p + key_size]);
-        p += @as(usize, key_size) + 1; // skip NUL terminator
-        const value = try allocator.dupe(u8, buf[p .. p + value_size]);
-        p += @as(usize, value_size) + 1;
-        headers[i] = .{ .key = key, .value = value };
-    }
-
-    return headers;
+    return wire.decodeHeaderMap(allocator, ptr[0..data_size]) catch &[_]wire.HeaderPair{};
 }
 
-fn appendJsonString(
-    allocator: std.mem.Allocator,
-    buf: *std.ArrayList(u8),
-    s: []const u8,
-) !void {
-    try buf.append(allocator, '"');
-    for (s) |c| {
-        switch (c) {
-            '"' => try buf.appendSlice(allocator, "\\\""),
-            '\\' => try buf.appendSlice(allocator, "\\\\"),
-            '\n' => try buf.appendSlice(allocator, "\\n"),
-            '\r' => try buf.appendSlice(allocator, "\\r"),
-            '\t' => try buf.appendSlice(allocator, "\\t"),
-            0x08 => try buf.appendSlice(allocator, "\\b"),
-            0x0c => try buf.appendSlice(allocator, "\\f"),
-            else => {
-                if (c < 0x20) {
-                    // RFC 8259 requires every <0x20 control byte to
-                    // be escaped. Fall back to \u00XX for the ones
-                    // without a short form.
-                    var hex_buf: [6]u8 = undefined;
-                    const hex = std.fmt.bufPrint(&hex_buf, "\\u{x:0>4}", .{c}) catch unreachable;
-                    try buf.appendSlice(allocator, hex);
-                } else {
-                    try buf.append(allocator, c);
-                }
-            },
-        }
-    }
-    try buf.append(allocator, '"');
-}
+// ---------------------------------------------------------------------------
+// Host writes.
+// ---------------------------------------------------------------------------
 
 fn denyWithStatus(status: i32) void {
     _ = proxy_send_local_response(
@@ -529,4 +520,8 @@ fn denyWithStatus(status: i32) void {
         0,
         -1,
     );
+}
+
+fn logMsg(level: i32, msg: []const u8) void {
+    _ = proxy_log(level, msg.ptr, msg.len);
 }
