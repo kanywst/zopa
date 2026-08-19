@@ -78,6 +78,12 @@ once the first stable tag ships.
   no body -- pinned by a check in `examples/envoy/run.sh` -- but the
   early return was wrong for any host that does, and a condition that
   must hold for every request belongs in `allow` regardless.
+- **An unreadable header map denies.** A host error or a buffer that
+  didn't decode produced an empty header set, which is not the same
+  thing: a rule shaped `deny if input.headers["x-blocked"]` sees the
+  header as absent and lets the request through. Same mistake as
+  deciding on a truncated body. A map with zero entries is still a
+  legitimate answer.
 - **A body the host refuses to hand over denies.** `readBodyBytes`
   folded a failed `proxy_get_buffer_bytes` into an empty slice, which
   is indistinguishable downstream from a request that carried no body:

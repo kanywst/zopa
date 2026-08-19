@@ -250,8 +250,10 @@ fn compilePolicy(policy_bytes: []const u8) bool {
     compiled_policy = bundle;
     has_allow_body = body_rules;
     has_allow_response = response_rules;
+    // Scoped to the package the phase callbacks dispatch into, which
+    // is the implicit `""` -- see `decide`.
     body_class = if (body_rules)
-        body_deps.analyzeTarget(bundle, body_target_rule).class
+        body_deps.analyzeTarget(bundle, "", body_target_rule).class
     else
         .no_body_refs;
 
@@ -397,7 +399,10 @@ fn evaluateRequest(policy: ast.Modules) bool {
 
     const method = readSingleHeader(allocator, map_type_request_headers, ":method") catch return false;
     const path = readSingleHeader(allocator, map_type_request_headers, ":path") catch return false;
-    const headers = readAllHeaders(allocator, map_type_request_headers);
+    const headers = readAllHeaders(allocator, map_type_request_headers) catch {
+        logMsg(log_level_warn, "zopa: could not read request headers; denying");
+        return false;
+    };
 
     const input = wire.buildRequestInput(
         allocator,
@@ -437,7 +442,10 @@ fn evaluateResponse(policy: ast.Modules) bool {
     const allocator = arena.allocator();
 
     const status = readSingleHeader(allocator, map_type_response_headers, ":status") catch return false;
-    const headers = readAllHeaders(allocator, map_type_response_headers);
+    const headers = readAllHeaders(allocator, map_type_response_headers) catch {
+        logMsg(log_level_warn, "zopa: could not read response headers; denying");
+        return false;
+    };
 
     const input = wire.buildResponseInput(allocator, status orelse "", headers) catch return false;
 
@@ -514,20 +522,25 @@ fn readSingleHeader(
     return try allocator.dupe(u8, ptr[0..data_size]);
 }
 
-/// Read and decode the whole header map. A host error or a malformed
-/// buffer yields no headers: the pseudo-headers a policy usually keys
-/// on are fetched separately, and an unreadable map should not by
-/// itself decide the request. The rules still have to hold.
-fn readAllHeaders(allocator: std.mem.Allocator, map_type: i32) []const wire.HeaderPair {
+/// Read and decode the whole header map.
+///
+/// A host error or a buffer that doesn't decode is an error, not an
+/// empty header set. The two are indistinguishable to a policy, and
+/// "no headers" is an answer: a rule shaped `deny if
+/// input.headers["x-blocked"]` sees the header as absent and lets the
+/// request through. That is the same mistake as evaluating a truncated
+/// body -- deciding on input we know is incomplete. A map with zero
+/// entries is a real answer and is returned as one.
+fn readAllHeaders(allocator: std.mem.Allocator, map_type: i32) ![]const wire.HeaderPair {
     var data: ?[*]u8 = null;
     var data_size: usize = 0;
     const status = proxy_get_header_map_pairs(map_type, &data, &data_size);
-    if (status != status_ok) return &[_]wire.HeaderPair{};
+    if (status != status_ok) return error.HeadersUnavailable;
     if (data_size == 0) return &[_]wire.HeaderPair{};
-    const ptr = data orelse return &[_]wire.HeaderPair{};
+    const ptr = data orelse return error.HeadersUnavailable;
     defer memory.hostFree(ptr);
 
-    return wire.decodeHeaderMap(allocator, ptr[0..data_size]) catch &[_]wire.HeaderPair{};
+    return wire.decodeHeaderMap(allocator, ptr[0..data_size]);
 }
 
 // ---------------------------------------------------------------------------
