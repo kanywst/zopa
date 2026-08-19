@@ -12,6 +12,7 @@ pub const builtins = @import("builtins.zig");
 pub const eval = @import("eval.zig");
 pub const json = @import("json.zig");
 pub const memory = @import("memory.zig");
+pub const wire = @import("wire.zig");
 
 pub const Value = json.Value;
 pub const Module = ast.Module;
@@ -29,4 +30,5 @@ test {
     _ = builtins;
     _ = eval;
     _ = json;
+    _ = wire;
 }
