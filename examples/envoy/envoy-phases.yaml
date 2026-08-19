@@ -1,0 +1,162 @@
+# Envoy bootstrap for the multi-phase end-to-end check.
+#
+# Placeholders substituted by examples/envoy/run.sh:
+#   __WASM_PATH__     absolute path to zig-out/bin/zopa.wasm
+#   __PORT__          data plane listener port
+#   __BACKEND_PORT__  loopback upstream port
+#   __ADMIN_PORT__    admin port (used to detect readiness)
+#   __RUNTIME__       wasm runtime id (wamr locally, v8 in CI)
+#
+# The companion `envoy.yaml` covers the request-headers phase. This
+# one carries a policy with all three target rules so the body and
+# response callbacks are exercised against a real host: those paths
+# can't be reached from the generic-ABI suites, which call `evaluate`
+# directly and never touch proxy-wasm's buffering or local-response
+# machinery.
+#
+# Two listeners, not one. A route ending in `direct_response` is
+# answered before the request body is read, so `proxy_on_request_body`
+# never fires and a body-phase test would silently pass by never
+# running. The ingress listener therefore proxies to a second listener
+# in the same process, which plays the upstream.
+#
+# Policy:
+#   allow           always (request phase is not what we're testing)
+#   allow_body      deny when input.body.amount > 1000
+#   allow_response  deny when the upstream status is 418
+#
+# Upstream routes: /teapot answers 418 so the response rule has
+# something to reject; everything else answers 200.
+
+admin:
+  address:
+    socket_address: { address: 127.0.0.1, port_value: __ADMIN_PORT__ }
+
+static_resources:
+  listeners:
+    - name: ingress_listener
+      address:
+        socket_address: { address: 127.0.0.1, port_value: __PORT__ }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                codec_type: AUTO
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: loopback_backend }
+                http_filters:
+                  - name: envoy.filters.http.wasm
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+                      config:
+                        name: zopa
+                        root_id: zopa
+                        configuration:
+                          "@type": type.googleapis.com/google.protobuf.StringValue
+                          value: |
+                            {
+                              "type": "module",
+                              "rules": [
+                                {
+                                  "type": "rule",
+                                  "name": "allow",
+                                  "body": [{ "type": "value", "value": true }]
+                                },
+                                {
+                                  "type": "rule",
+                                  "name": "allow_body",
+                                  "default": true,
+                                  "value": { "type": "value", "value": true }
+                                },
+                                {
+                                  "type": "rule",
+                                  "name": "allow_body",
+                                  "body": [
+                                    {
+                                      "type": "gt",
+                                      "left": { "type": "ref", "path": ["input", "body", "amount"] },
+                                      "right": { "type": "value", "value": 1000 }
+                                    }
+                                  ],
+                                  "value": { "type": "value", "value": false }
+                                },
+                                {
+                                  "type": "rule",
+                                  "name": "allow_response",
+                                  "default": true,
+                                  "value": { "type": "value", "value": true }
+                                },
+                                {
+                                  "type": "rule",
+                                  "name": "allow_response",
+                                  "body": [
+                                    {
+                                      "type": "eq",
+                                      "left": { "type": "ref", "path": ["input", "response", "status"] },
+                                      "right": { "type": "value", "value": 418 }
+                                    }
+                                  ],
+                                  "value": { "type": "value", "value": false }
+                                }
+                              ]
+                            }
+                        vm_config:
+                          runtime: __RUNTIME__
+                          code:
+                            local:
+                              filename: __WASM_PATH__
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+    - name: backend_listener
+      address:
+        socket_address: { address: 127.0.0.1, port_value: __BACKEND_PORT__ }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: backend_http
+                codec_type: AUTO
+                route_config:
+                  name: backend_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/teapot" }
+                          direct_response:
+                            status: 418
+                            body:
+                              inline_string: "teapot\n"
+                        - match: { prefix: "/" }
+                          direct_response:
+                            status: 200
+                            body:
+                              inline_string: "ok\n"
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: loopback_backend
+      connect_timeout: 1s
+      type: STATIC
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: loopback_backend
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: 127.0.0.1, port_value: __BACKEND_PORT__ }
