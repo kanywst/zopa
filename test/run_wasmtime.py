@@ -61,6 +61,7 @@ malloc = exports["malloc"]
 free = exports["free"]
 evaluate = exports["evaluate"]
 evaluate_target = exports["evaluate_target"]
+evaluate_addressed = exports["evaluate_addressed"]
 memory: wasmtime.Memory = exports["memory"]
 
 
@@ -99,6 +100,33 @@ def decide_target(input_obj, ast_obj, target: str) -> int:
         free(store, ip)
         free(store, ap)
         free(store, tp)
+
+
+def decide_addressed(input_obj, ast_obj, package: str, target: str) -> int:
+    ip, il = write_json(input_obj)
+    ap, al = write_json(ast_obj)
+    pp, pl = write_bytes(package.encode("utf-8"))
+    tp, tl = write_bytes(target.encode("utf-8"))
+    try:
+        return evaluate_addressed(store, ip, il, ap, al, pp, pl, tp, tl)
+    finally:
+        free(store, ip)
+        free(store, ap)
+        free(store, pp)
+        free(store, tp)
+
+
+def decide_raw(input_bytes: bytes, ast_obj) -> int:
+    """Decide against input bytes that json.dumps would not produce --
+    duplicate keys and non-JSON number literals have to be hand-written
+    to be testable at all."""
+    ip, il = write_bytes(input_bytes)
+    ap, al = write_json(ast_obj)
+    try:
+        return evaluate(store, ip, il, ap, al)
+    finally:
+        free(store, ip)
+        free(store, ap)
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +546,223 @@ check(
 check(
     "evaluate_target allow_body: body_raw=ok -> allow",
     decide_target({"body": None, "body_raw": "ok"}, raw_policy, "allow_body"),
+    1,
+)
+
+# ---------------------------------------------------------------------------
+# Rule dispatch and parser agreement. These carry the highest fail-open
+# stakes in the module, so they run under this runtime too rather than
+# only under Node.
+# ---------------------------------------------------------------------------
+
+addressed_packages = {
+    "type": "modules",
+    "modules": [
+        {
+            "type": "module",
+            "package": "authz",
+            "rules": [
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "body": [{"type": "eq", "left": ref_role, "right": {"type": "value", "value": "admin"}}],
+                }
+            ],
+        },
+        {
+            "type": "module",
+            "package": "audit",
+            "rules": [{"type": "rule", "name": "allow", "body": [{"type": "value", "value": True}]}],
+        },
+    ],
+}
+
+check(
+    "addressed: authz.allow fires for admin",
+    decide_addressed({"user": {"role": "admin"}}, addressed_packages, "authz", "allow"),
+    1,
+)
+check(
+    "addressed: authz.allow denies a guest",
+    decide_addressed({"user": {"role": "guest"}}, addressed_packages, "authz", "allow"),
+    0,
+)
+check(
+    "addressed: audit.allow fires regardless of role",
+    decide_addressed({"user": {"role": "guest"}}, addressed_packages, "audit", "allow"),
+    1,
+)
+check(
+    "addressed: unknown package denies",
+    decide_addressed({"user": {"role": "admin"}}, addressed_packages, "nope", "allow"),
+    0,
+)
+
+# A package split across modules is one rule set: the default declared
+# in the first module governs the rule declared in the second.
+split_package = {
+    "type": "modules",
+    "modules": [
+        {
+            "type": "module",
+            "package": "authz",
+            "rules": [
+                {"type": "rule", "name": "allow", "default": True, "value": {"type": "value", "value": True}}
+            ],
+        },
+        {
+            "type": "module",
+            "package": "authz",
+            "rules": [
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "body": [{"type": "eq", "left": ref_role, "right": {"type": "value", "value": "banned"}}],
+                    "value": {"type": "value", "value": False},
+                }
+            ],
+        },
+    ],
+}
+
+check(
+    "split package: sibling module inherits the default -> allow",
+    decide_addressed({"user": {"role": "viewer"}}, split_package, "authz", "allow"),
+    1,
+)
+check(
+    "split package: deny rule in the second module still fires",
+    decide_addressed({"user": {"role": "banned"}}, split_package, "authz", "allow"),
+    0,
+)
+
+# Two definitions of one complete rule holding at once with different
+# values is eval_conflict_error in OPA, not a race the first one wins.
+conflicting = {
+    "type": "modules",
+    "modules": [
+        {
+            "type": "module",
+            "package": "authz",
+            "rules": [
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "body": [
+                        {
+                            "type": "eq",
+                            "left": {"type": "ref", "path": ["input", "tenant"]},
+                            "right": {"type": "value", "value": "acme"},
+                        }
+                    ],
+                }
+            ],
+        },
+        {
+            "type": "module",
+            "package": "authz",
+            "rules": [
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "body": [{"type": "eq", "left": ref_role, "right": {"type": "value", "value": "banned"}}],
+                    "value": {"type": "value", "value": False},
+                }
+            ],
+        },
+    ],
+}
+
+check(
+    "conflicting definitions -> -1 (deny), not first-in-bundle",
+    decide_addressed({"tenant": "acme", "user": {"role": "banned"}}, conflicting, "authz", "allow"),
+    -1,
+)
+check(
+    "only the allow definition holds -> allow",
+    decide_addressed({"tenant": "acme", "user": {"role": "viewer"}}, conflicting, "authz", "allow"),
+    1,
+)
+check(
+    "only the deny definition holds -> deny",
+    decide_addressed({"tenant": "other", "user": {"role": "banned"}}, conflicting, "authz", "allow"),
+    0,
+)
+
+# Two `default` declarations for one rule: rego_type_error in OPA,
+# rejected when the AST is built here.
+duplicate_defaults = {
+    "type": "modules",
+    "modules": [
+        {
+            "type": "module",
+            "package": "authz",
+            "rules": [
+                {"type": "rule", "name": "allow", "default": True, "value": {"type": "value", "value": False}}
+            ],
+        },
+        {
+            "type": "module",
+            "package": "authz",
+            "rules": [
+                {"type": "rule", "name": "allow", "default": True, "value": {"type": "value", "value": True}}
+            ],
+        },
+    ],
+}
+
+check(
+    "two defaults for one rule -> -1",
+    decide_addressed({}, duplicate_defaults, "authz", "allow"),
+    -1,
+)
+
+# Parser agreement with the backend. Duplicate keys resolve last-wins in
+# Go, JavaScript, and OPA; the number grammar is RFC 8259, not whatever
+# a float parser happens to accept.
+dup_policy = {"type": "eq", "left": ref_role, "right": {"type": "value", "value": "admin"}}
+check(
+    "duplicate input keys resolve last-wins -> deny",
+    decide_raw(b'{"user":{"role":"admin","role":"guest"}}', dup_policy),
+    0,
+)
+
+for bad in (b'{"n":01}', b'{"n":1.}', b'{"n":.5}', b'{"n":+1}', b'{"n":1e}'):
+    check(
+        f"non-JSON number {bad.decode()} is rejected -> -1",
+        decide_raw(bad, {"type": "value", "value": True}),
+        -1,
+    )
+
+# body_truncated is part of the body-phase input shape.
+truncation_policy = {
+    "type": "module",
+    "rules": [
+        {"type": "rule", "name": "allow_body", "default": True, "value": {"type": "value", "value": True}},
+        {
+            "type": "rule",
+            "name": "allow_body",
+            "body": [{"type": "ref", "path": ["input", "body_truncated"]}],
+            "value": {"type": "value", "value": False},
+        },
+    ],
+}
+check(
+    "body_truncated=true -> policy can deny",
+    decide_target(
+        {"body": None, "body_raw": '{"a":1', "body_truncated": True},
+        truncation_policy,
+        "allow_body",
+    ),
+    0,
+)
+check(
+    "body_truncated=false -> default allows",
+    decide_target(
+        {"body": {"a": 1}, "body_raw": '{"a":1}', "body_truncated": False},
+        truncation_policy,
+        "allow_body",
+    ),
     1,
 )
 

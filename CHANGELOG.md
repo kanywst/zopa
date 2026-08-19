@@ -109,9 +109,12 @@ once the first stable tag ships.
   compile error in Zig 0.16.0's own test runner.
 - `body_truncated` in the body-phase input, so a policy can key on
   truncation directly rather than only relying on the shim's refusal.
-- `evaluate_addressed` is now exercised from a host in `test/run.mjs`.
-  The export shipped in 0.2.0 with no host-side caller outside the
-  conformance harness.
+- `evaluate_addressed` is now exercised from a host in `test/run.mjs`
+  and `test/run_wasmtime.py`. The export shipped in 0.2.0 with no
+  host-side caller outside the conformance harness, and the wasmtime
+  harness did not even bind it -- so the suite that exists to catch
+  runtime-specific divergence could not reach package dispatch at all.
+  Rule dispatch and parser agreement now run under both runtimes.
 - Envoy end-to-end coverage of the body and response phases
   (`examples/envoy/envoy-phases.yaml`). The previous bootstrap ended in
   `direct_response`, which Envoy answers before reading the request
