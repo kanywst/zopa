@@ -27,9 +27,21 @@ export fn malloc(len: usize) ?[*]u8 {
     return memory.hostMalloc(len);
 }
 
+/// Same allocator under the name proxy-wasm ABI vNEXT uses. Hosts
+/// probe for this export first and fall back to `malloc`; exporting
+/// both costs one indirection and keeps the module loadable on either
+/// generation of host.
+export fn proxy_on_memory_allocate(len: usize) ?[*]u8 {
+    return memory.hostMalloc(len);
+}
+
 /// Free a buffer previously returned by `malloc`.
-export fn free(ptr: [*]u8) void {
-    memory.hostFree(ptr);
+///
+/// The pointer is nullable because a host that hands back 0 would
+/// otherwise send `hostFree` reading a length prefix from just below
+/// address zero.
+export fn free(ptr: ?[*]u8) void {
+    if (ptr) |p| memory.hostFree(p);
 }
 
 /// Run one evaluation. Returns 1 (allow), 0 (deny), or -1 (error).
