@@ -43,6 +43,29 @@ today a component wrapper would add size for no capability.
 [authzen]: https://openid.net/specs/authorization-api-1_0.html
 [pw]: https://github.com/proxy-wasm/spec
 
+## Done in v0.3.0
+
+- **Fail-closed everywhere.** Six paths could reach "allow" without
+  having decided: an oversized body, a chunked body evaluated on its
+  tail, a body the host would not hand over, a header map that would
+  not decode, an empty plugin configuration, and a deny that returned
+  `Continue` after answering the request. All deny now. See the
+  `CHANGELOG.md` entry for 0.3.0.
+- **Rego agreement on rule dispatch.** A package split across modules
+  is one rule set; conflicting definitions are an error rather than
+  resolved by bundle order; two `default` declarations for one rule are
+  rejected when the policy is built, as OPA rejects them at compile
+  time.
+- **Parser agreement.** RFC 8259 number grammar and last-wins duplicate
+  keys, so zopa and the service behind it read a request the same way.
+- **AuthZEN mapping.** [`docs/authzen.md`](docs/authzen.md) plus a
+  conformance fixture, following the Authorization API 1.0 Final
+  specification.
+- **The proxy-wasm ABI is tested in CI**, against a pinned upstream
+  Envoy, covering all three phases rather than only request headers.
+- **Policy compiled once at configure time** instead of re-parsed per
+  request.
+
 ## Done in v0.2.0
 
 - **Body-aware policies.** New `allow_body` target rule fires from

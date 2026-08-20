@@ -6,6 +6,31 @@ once the first stable tag ships.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-20
+
+A hardening release. Every change below exists because some path could
+reach "allow" without having actually decided, or because zopa and the
+service behind it could read the same bytes differently.
+
+**Upgrading is not transparent.** Requests and policies that worked
+under 0.2.0 can behave differently:
+
+- A filter configured without a `configuration` block no longer starts.
+  It used to load and pass every request through unevaluated.
+- A policy with two definitions of the same rule that hold at once with
+  different values now evaluates to `-1` (deny) instead of whichever
+  came first in the bundle. Two `default` declarations for one rule are
+  now rejected outright when the policy is built.
+- Input documents containing `01`, `1.`, `.5`, `+1`, or `1e` no longer
+  parse, and duplicate object keys resolve to the last occurrence
+  rather than the first.
+- A request body over the 64 KiB cap, a body the host will not hand
+  over, and a header map that will not decode all deny rather than
+  being evaluated against whatever was available.
+
+Read the *Security* section before upgrading; each entry says what the
+old behaviour let through.
+
 ### Security
 
 - **Oversized request bodies no longer fail open.** The body phase caps
@@ -140,6 +165,9 @@ once the first stable tag ships.
   Checked by `test/conformance/fixtures/09_authzen_evaluation.json`.
 - `bench/fixtures/03_rbac.json`: a default-deny RBAC policy, so the
   benchmark reports something closer to a policy people write.
+- Release build size: ~60 KB → ~62 KB. The increase covers the
+  conflict and duplicate-default checks, the body-deps wiring, and the
+  fail-closed paths.
 
 ### Changed
 
@@ -152,7 +180,9 @@ once the first stable tag ships.
 - `eval.evaluateCompiled` is the new entry point for hosts that hold a
   policy across requests. `evaluate`, `evaluate_target`, and
   `evaluate_addressed` are unchanged.
-
+- `build.zig.zon` now carries the real version. It still said `0.1.0`
+  when 0.2.0 shipped, so anything resolving the package by version saw
+  the wrong one.
 - Repository moved from `0-draft/zopa` to `kanywst/zopa`. GitHub
   redirects the old URL, and `build.zig.zon` never carried the org, so
   clones and `zig fetch` keep working. Forward-looking references
@@ -228,8 +258,6 @@ new body and response phases are opt-in via the matching rule
   object iteration, the `Modules` bundle, the two new target-rule
   paths, and the body-deps analyser.
 
-[0.2.0]: https://github.com/kanywst/zopa/releases/tag/v0.2.0
-
 ## [0.1.0] - 2026-05-07
 
 First tagged release. Public surface (export names, AST schema,
@@ -264,5 +292,7 @@ callback semantics) is still alpha and may change before 1.0.
 
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
-[Unreleased]: https://github.com/kanywst/zopa/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/kanywst/zopa/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/kanywst/zopa/releases/tag/v0.3.0
+[0.2.0]: https://github.com/kanywst/zopa/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kanywst/zopa/releases/tag/v0.1.0
