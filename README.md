@@ -23,9 +23,9 @@ Hosts hand it a request input and a policy AST, both as JSON; zopa returns allow
 Grab the module and make one decision, in about thirty seconds:
 
 ```bash
-# from the latest release (cosign-signed, with SLSA provenance)
-curl -fsSLO https://github.com/kanywst/zopa/releases/latest/download/zopa-v0.2.0.wasm
-mv zopa-v0.2.0.wasm zopa.wasm
+# from a release (cosign-signed, with SLSA provenance)
+curl -fsSLO https://github.com/kanywst/zopa/releases/download/v0.3.0/zopa-v0.3.0.wasm
+mv zopa-v0.3.0.wasm zopa.wasm
 
 # or from the container image, rebuilt on every push to main
 docker create --name zopa ghcr.io/kanywst/zopa:edge && \
