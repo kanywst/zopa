@@ -1,6 +1,6 @@
 # String and collection builtins
 
-Status: Proposed (draft PR, design doc only).
+Status: **Implemented.** The `call` node and all four builtins — `startswith`, `endswith`, `contains`, `count` — shipped in v0.2.0 and live in `src/builtins.zig`. Type errors and unknown names resolve to `nil`, which denies in body position. Kept for the reasoning; see `docs/ast.md` for the node schema.
 Tracking: ROADMAP.md → Medium term ("Function calls").
 
 ## Motivation

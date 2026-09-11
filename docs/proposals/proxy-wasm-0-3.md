@@ -1,6 +1,6 @@
 # proxy-wasm 0.3.x support
 
-Status: Proposed (draft PR, design doc only).
+Status: **Open, blocked upstream.** proxy-wasm 0.3.0 has not been cut — the milestone is still open with unresolved issues filed through mid-2026, and work continues in the `vNEXT` ABI directory rather than a release. The one concrete vNEXT change zopa already carries is `proxy_on_memory_allocate`, exported alongside `malloc` so the module loads on either generation of host. Chasing the rest before it stabilises buys nothing; see ROADMAP.md.
 Tracking: ROADMAP.md → Longer term.
 
 ## Motivation

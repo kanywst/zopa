@@ -1,6 +1,6 @@
 # Response-side policies
 
-Status: Proposed (draft PR, design doc only).
+Status: **Implemented.** Shipped in v0.2.0: `proxy_on_response_headers` evaluates `allow_response` against `{response: {status, headers}}`, and a deny sends a 503. The phase is gated on the rule existing, so a request-only policy passes responses through untouched. v0.3.0 added Envoy end-to-end coverage (`examples/envoy/envoy-phases.yaml`), which needed a loopback listener because a `direct_response` route is answered before the body is read. Kept for the reasoning; see `docs/proxy-wasm.md` for what actually shipped.
 Tracking: ROADMAP.md → Near term.
 
 ## Motivation

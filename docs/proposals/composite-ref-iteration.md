@@ -1,6 +1,6 @@
 # Composite ref iteration
 
-Status: Proposed (draft PR, design doc only).
+Status: **Partially implemented.** Goal 1 shipped in v0.2.0 as the optional `kind` field on `some` / `every` — but `keys` and `values` only. `pairs` was never built: `Expr.IterKind` has two variants (`src/ast.zig`). **Goals 2 and 3 are still open** — there are no fixtures walking a `set`-typed value through a ref, and there is no `in` node, so membership still has to be written as a `some`.
 Tracking: ROADMAP.md → Medium term ("Set/object refs").
 
 ## Motivation

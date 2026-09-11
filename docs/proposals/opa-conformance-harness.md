@@ -1,6 +1,6 @@
 # OPA conformance harness
 
-Status: Proposed (draft PR, design doc only).
+Status: **Implemented.** Shipped in v0.2.0: `tools/rego2ast.py` converts `opa parse --format json` output into zopa's AST, and `zig build test-conformance` drives rego → `opa parse` → rego2ast → zopa over `test/conformance/fixtures/` (ten fixtures as of v0.3.1). Rego the converter cannot express makes it bail with `Unsupported`, which the runner records as SKIP rather than FAIL — so the harness also doubles as the coverage ledger this document asked for.
 Tracking: ROADMAP.md → Near term ("AST conformance harness").
 
 ## Motivation

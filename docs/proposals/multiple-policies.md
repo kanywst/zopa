@@ -1,6 +1,6 @@
 # Multiple policies per VM
 
-Status: Proposed (draft PR, design doc only).
+Status: **Partially implemented.** Goals 1, 2 and 4 shipped in v0.2.0: the `{"type": "modules"}` bundle, the optional `package` field on a module, and `evaluate_addressed(input, ast, package, rule)` for fully qualified lookup. v0.3.0 then made dispatch package-scoped rather than module-scoped, so a package split across modules is one rule set. **Goal 3 is still open** — there is no `targets[]` plugin config and no per-target `on_deny`; the proxy-wasm shim still hard-codes `allow`, `allow_body` and `allow_response` (`src/proxy_wasm.zig`). An audit policy that decides "log this" has no way to be wired up.
 Tracking: ROADMAP.md → Medium term ("Multiple policies").
 
 ## Motivation
