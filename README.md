@@ -1,12 +1,8 @@
 # zopa
 
-Tiny, zero-allocation authorization engine for proxy-wasm and the edge.
-~60 KB. No GC. No deps.
+Tiny, zero-allocation authorization engine for proxy-wasm and the edge. ~60 KB. No GC. No deps.
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![CI](https://github.com/kanywst/zopa/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/zopa/actions/workflows/ci.yml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/kanywst/zopa/badge)](https://securityscorecards.dev/viewer/?uri=github.com/kanywst/zopa)
-[![Zig](https://img.shields.io/badge/zig-0.16.0-orange.svg)](https://ziglang.org)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![CI](https://github.com/kanywst/zopa/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/zopa/actions/workflows/ci.yml) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/kanywst/zopa/badge)](https://securityscorecards.dev/viewer/?uri=github.com/kanywst/zopa) [![Zig](https://img.shields.io/badge/zig-0.16.0-orange.svg)](https://ziglang.org)
 
 **What it is:** an authorization engine that fits in a proxy-wasm filter, so you can enforce policy at the edge without putting a 30 MB sidecar next to every proxy.
 
@@ -75,9 +71,7 @@ zig build --release=small        # -> zig-out/bin/zopa.wasm, ~60 KB
 
 ## Numbers
 
-Release build, measured on this repository's own benchmark
-(`zig build bench`, Node host, 10k iterations after 1k warm-up,
-microseconds):
+Release build, measured on this repository's own benchmark (`zig build bench`, Node host, 10k iterations after 1k warm-up, microseconds):
 
 | Policy                                        | p50   | p95   | mean  |
 | --------------------------------------------- | ----- | ----- | ----- |
@@ -85,53 +79,25 @@ microseconds):
 | `input.method == "GET"`                       | 4.67  | 5.17  | 4.74  |
 | default-deny RBAC: path prefix + role + perms | 26.67 | 29.25 | 27.25 |
 
-Artifact size is 61 KB. Every row above is reproducible from a clean
-checkout, but the machine is a developer laptop -- treat the shape as
-the signal and re-run `zig build bench` on your own hardware before
-quoting a number.
+Artifact size is 61 KB. Every row above is reproducible from a clean checkout, but the machine is a developer laptop -- treat the shape as the signal and re-run `zig build bench` on your own hardware before quoting a number.
 
-Two caveats worth stating plainly. These are generic-ABI numbers,
-which means each call re-parses the policy AST -- most of the RBAC row
-is that parse. The proxy-wasm path compiles the policy once in
-`proxy_on_configure` and keeps it, so per-request work there is input
-parsing plus the rule walk. And there is no cross-engine comparison
-here: asserting "same answer as OPA" needs the conformance corpus to
-be much wider than it is, and a latency number without that assertion
-isn't worth printing.
+Two caveats worth stating plainly. These are generic-ABI numbers, which means each call re-parses the policy AST -- most of the RBAC row is that parse. The proxy-wasm path compiles the policy once in `proxy_on_configure` and keeps it, so per-request work there is input parsing plus the rule walk. And there is no cross-engine comparison here: asserting "same answer as OPA" needs the conformance corpus to be much wider than it is, and a latency number without that assertion isn't worth printing.
 
 ## Why zopa
 
-**Size.** A release build is around 60 KB. OPA's WASM build is
-two orders of magnitude larger; Cedar and Casbin don't ship as wasm
-modules at all.
+**Size.** A release build is around 60 KB. OPA's WASM build is two orders of magnitude larger; Cedar and Casbin don't ship as wasm modules at all.
 
-**Allocation profile.** Every evaluation runs against a single
-`std.heap.ArenaAllocator` that is reset with `.retain_capacity` after
-each call. After a brief warm-up, `memory.grow` doesn't fire again --
-the wasm linear memory footprint stays flat regardless of throughput.
+**Allocation profile.** Every evaluation runs against a single `std.heap.ArenaAllocator` that is reset with `.retain_capacity` after each call. After a brief warm-up, `memory.grow` doesn't fire again -- the wasm linear memory footprint stays flat regardless of throughput.
 
-**proxy-wasm native.** `proxy_on_request_headers` runs the `allow`
-target rule; `proxy_on_request_body` and `proxy_on_response_headers`
-fire `allow_body` / `allow_response` when present. Lifecycle exports
-are first-class. The repo ships an Envoy bootstrap
-(`examples/envoy/`) exercised in CI against a real Envoy.
+**proxy-wasm native.** `proxy_on_request_headers` runs the `allow` target rule; `proxy_on_request_body` and `proxy_on_response_headers` fire `allow_body` / `allow_response` when present. Lifecycle exports are first-class. The repo ships an Envoy bootstrap (`examples/envoy/`) exercised in CI against a real Envoy.
 
-**Fails closed.** Every path that can't reach a decision denies: no
-policy, a policy that won't parse, a host call that errors, a body
-larger than the buffer cap. An authorization filter that fails open is
-worse than no filter, because the deployment believes it is protected.
+**Fails closed.** Every path that can't reach a decision denies: no policy, a policy that won't parse, a host call that errors, a body larger than the buffer cap. An authorization filter that fails open is worse than no filter, because the deployment believes it is protected.
 
-**No DSL to learn.** zopa accepts a Rego-flavored AST as JSON. Use
-OPA's compiler to produce it (`tools/rego2ast.py` covers the v1
-subset against `opa parse --format json`); zopa runs it. The wasm
-module is the runtime, not the language.
+**No DSL to learn.** zopa accepts a Rego-flavored AST as JSON. Use OPA's compiler to produce it (`tools/rego2ast.py` covers the v1 subset against `opa parse --format json`); zopa runs it. The wasm module is the runtime, not the language.
 
-**Standards-shaped input.** An [OpenID AuthZEN][authzen] Access
-Evaluation request is already a valid zopa input -- no adapter, no
-field renaming. See [`docs/authzen.md`](docs/authzen.md).
+**Standards-shaped input.** An [OpenID AuthZEN][authzen] Access Evaluation request is already a valid zopa input -- no adapter, no field renaming. See [`docs/authzen.md`](docs/authzen.md).
 
-**No external dependencies.** Just Zig 0.16+ stdlib. The whole code
-fits in `src/` and reads top-to-bottom.
+**No external dependencies.** Just Zig 0.16+ stdlib. The whole code fits in `src/` and reads top-to-bottom.
 
 [authzen]: https://openid.net/specs/authorization-api-1_0.html
 
@@ -139,21 +105,11 @@ fits in `src/` and reads top-to-bottom.
 
 Reaching for the wrong tool costs more than the 60 KB saves:
 
-- **You need the Rego language, not a subset.** Comprehensions,
-  `http.send`, partial evaluation, most builtins -- none of that is
-  here. Run OPA.
-- **You need a management plane.** Bundle distribution, decision logs,
-  status APIs, policy hot-reload from a server. That is what OPA is
-  for; zopa is a decision function with a configure hook.
-- **You need explanations, not decisions.** zopa returns a boolean. It
-  can't tell you which rule fired or why.
-- **Your filter is body-heavy and single-tenant.** [Envoy dynamic
-  modules][dynmod] run native in-process with no VM and no
-  serialisation, which is faster. You give up the sandbox and pin the
-  build to an Envoy version. If the isolation boundary isn't buying
-  you anything, take the speed.
-- **You want a drop-in OPA replacement.** zopa answers a narrower
-  question than OPA does, on purpose.
+- **You need the Rego language, not a subset.** Comprehensions, `http.send`, partial evaluation, most builtins -- none of that is here. Run OPA.
+- **You need a management plane.** Bundle distribution, decision logs, status APIs, policy hot-reload from a server. That is what OPA is for; zopa is a decision function with a configure hook.
+- **You need explanations, not decisions.** zopa returns a boolean. It can't tell you which rule fired or why.
+- **Your filter is body-heavy and single-tenant.** [Envoy dynamic modules][dynmod] run native in-process with no VM and no serialisation, which is faster. You give up the sandbox and pin the build to an Envoy version. If the isolation boundary isn't buying you anything, take the speed.
+- **You want a drop-in OPA replacement.** zopa answers a narrower question than OPA does, on purpose.
 
 [dynmod]: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/advanced/dynamic_modules
 
@@ -170,12 +126,9 @@ Reaching for the wrong tool costs more than the 60 KB saves:
 | `evaluate_target`          | `(input, ast, rule) -> i32`          | Decide a named rule: `allow_body`, `allow_response`, or your own. |
 | `evaluate_addressed`       | `(input, ast, package, rule) -> i32` | Decide `package.rule` inside a `modules` bundle.                  |
 
-The three decision exports return `1` (allow), `0` (deny), or `-1`
-(error). Treat `-1` as deny; it means the input or policy could not be
-evaluated, which is never a grant.
+The three decision exports return `1` (allow), `0` (deny), or `-1` (error). Treat `-1` as deny; it means the input or policy could not be evaluated, which is never a grant.
 
-Buffers passed in must stay alive for the duration of the call --
-string values in the parsed tree alias them rather than being copied.
+Buffers passed in must stay alive for the duration of the call -- string values in the parsed tree alias them rather than being copied.
 
 ### As an Envoy proxy-wasm filter
 
@@ -203,8 +156,7 @@ http_filters:
               filename: /etc/zopa/zopa.wasm
 ```
 
-A complete bootstrap with end-to-end test runner is in
-[`examples/envoy/`](examples/envoy/).
+A complete bootstrap with end-to-end test runner is in [`examples/envoy/`](examples/envoy/).
 
 ## Policy AST
 
@@ -234,16 +186,9 @@ The AST is Rego-shaped JSON. Full reference: [`docs/ast.md`](docs/ast.md).
 ]}
 ```
 
-Supported nodes: `value`, `ref`, `compare` (`eq`/`neq`/`lt`/`lte`/`gt`/`gte`),
-`not`, `set`, `some`, `every`, `call`, `module`, `modules`, `rule`.
-The `type` field accepts shorthand for compare ops (`{"type": "eq", ...}`
-is the same as `{"type": "compare", "op": "eq", ...}`).
+Supported nodes: `value`, `ref`, `compare` (`eq`/`neq`/`lt`/`lte`/`gt`/`gte`), `not`, `set`, `some`, `every`, `call`, `module`, `modules`, `rule`. The `type` field accepts shorthand for compare ops (`{"type": "eq", ...}` is the same as `{"type": "compare", "op": "eq", ...}`).
 
-Builtin functions surfaced via `call`: `startswith`, `endswith`,
-`contains`, `count`. Object iteration supports `kind: "keys"`
-(default) or `"values"` on `some` / `every`. Multi-package bundles
-use `{"type": "modules", "modules": [...]}` and dispatch via
-`evaluate_addressed(input, ast, package, rule)`.
+Builtin functions surfaced via `call`: `startswith`, `endswith`, `contains`, `count`. Object iteration supports `kind: "keys"` (default) or `"values"` on `some` / `every`. Multi-package bundles use `{"type": "modules", "modules": [...]}` and dispatch via `evaluate_addressed(input, ast, package, rule)`.
 
 ## Architecture
 
@@ -263,16 +208,9 @@ use `{"type": "modules", "modules": [...]}` and dispatch via
    +----------+                       +-----------------+
 ```
 
-`host_allocator` (`std.heap.wasm_allocator`) lives for the module's
-lifetime and backs every host-visible buffer. The request arena is
-allocated on top of it and reset at the end of every `evaluate()`,
-including the proxy-wasm callback path.
+`host_allocator` (`std.heap.wasm_allocator`) lives for the module's lifetime and backs every host-visible buffer. The request arena is allocated on top of it and reset at the end of every `evaluate()`, including the proxy-wasm callback path.
 
-The proxy-wasm path adds one thing to the picture: the policy is
-parsed and built once in `proxy_on_configure`, onto a second long-lived
-arena, and kept. Per-request work there is the input parse plus the
-rule walk -- `ast.build` does not run again until the filter is
-reconfigured.
+The proxy-wasm path adds one thing to the picture: the policy is parsed and built once in `proxy_on_configure`, onto a second long-lived arena, and kept. Per-request work there is the input parse plus the rule walk -- `ast.build` does not run again until the filter is reconfigured.
 
 More detail in [`docs/architecture.md`](docs/architecture.md).
 
@@ -290,9 +228,7 @@ The artifact is `zig-out/bin/zopa.wasm`.
 
 ## Testing
 
-The same policies run under every host zopa claims to support, because
-"it works in Node" says nothing about the proxy-wasm ABI. None of the
-hosts are required locally; pick what's installed. CI runs all of them.
+The same policies run under every host zopa claims to support, because "it works in Node" says nothing about the proxy-wasm ABI. None of the hosts are required locally; pick what's installed. CI runs all of them.
 
 ```bash
 zig build test-unit         # Zig host-side unit tests, incl. fuzz smoke runs
@@ -311,10 +247,7 @@ python3 -m venv .venv-test
 .venv-test/bin/pip install -r test/requirements.txt
 ```
 
-`zig build test-envoy` is the only suite that exercises proxy-wasm
-itself -- configure, the three phase callbacks, body buffering, and
-`send_local_response`. Everything else calls `evaluate` directly and
-would keep passing with a broken shim.
+`zig build test-envoy` is the only suite that exercises proxy-wasm itself -- configure, the three phase callbacks, body buffering, and `send_local_response`. Everything else calls `evaluate` directly and would keep passing with a broken shim.
 
 ## Comparison
 
@@ -331,82 +264,44 @@ would keep passing with a broken shim.
 [cedar]: https://www.cedarpolicy.com/
 [casbin]: https://casbin.org/
 
-zopa is not a replacement for OPA when you need the full Rego
-language, the management plane, or bundles. It's a drop-in for the
-narrow case where you've already compiled the policy and want to
-evaluate it inside a proxy-wasm filter without a 30 MB sidecar.
+zopa is not a replacement for OPA when you need the full Rego language, the management plane, or bundles. It's a drop-in for the narrow case where you've already compiled the policy and want to evaluate it inside a proxy-wasm filter without a 30 MB sidecar.
 
 ## FAQ
 
-**Do I have to write the AST by hand?**
-No. Write Rego, run `opa parse --format json`, and pipe it through
-`tools/rego2ast.py`. Hand-writing the AST is for tests and one-liners.
+**Do I have to write the AST by hand?** No. Write Rego, run `opa parse --format json`, and pipe it through `tools/rego2ast.py`. Hand-writing the AST is for tests and one-liners.
 
-**What happens if my Rego uses something zopa doesn't support?**
-`rego2ast.py` refuses to convert it rather than emitting something that
-evaluates differently. The conformance runner records that as a SKIP,
-not a pass. There is no silent degradation.
+**What happens if my Rego uses something zopa doesn't support?** `rego2ast.py` refuses to convert it rather than emitting something that evaluates differently. The conformance runner records that as a SKIP, not a pass. There is no silent degradation.
 
-**Is it really zero-allocation?**
-Not literally -- it allocates from an arena. What it doesn't do is grow
-linear memory in steady state: the arena is reset with
-`.retain_capacity` after every evaluation, so once the high-water mark
-is reached, `memory.grow` stops firing. There is no GC and nothing to
-tune.
+**Is it really zero-allocation?** Not literally -- it allocates from an arena. What it doesn't do is grow linear memory in steady state: the arena is reset with `.retain_capacity` after every evaluation, so once the high-water mark is reached, `memory.grow` stops firing. There is no GC and nothing to tune.
 
-**What does it do when something goes wrong?**
-Denies. Unparseable input, a policy that won't build, a host call that
-fails, a request body bigger than the 64 KiB buffer cap -- all deny.
-The one place this is subtle is the body cap: a truncated body is
-refused outright rather than evaluated against the prefix, because a
-prefix that fails to parse would make a deny rule silently miss.
+**What does it do when something goes wrong?** Denies. Unparseable input, a policy that won't build, a host call that fails, a request body bigger than the 64 KiB buffer cap -- all deny. The one place this is subtle is the body cap: a truncated body is refused outright rather than evaluated against the prefix, because a prefix that fails to parse would make a deny rule silently miss.
 
-**Can I run more than one policy in a VM?**
-Yes -- bundle them as `{"type":"modules","modules":[...]}` and address
-`(package, rule)` with `evaluate_addressed`. What you can't do today is
-give two Envoy filters sharing an explicit `vm_id` different policies;
-the last configure wins. See ROADMAP.
+**Can I run more than one policy in a VM?** Yes -- bundle them as `{"type":"modules","modules":[...]}` and address `(package, rule)` with `evaluate_addressed`. What you can't do today is give two Envoy filters sharing an explicit `vm_id` different policies; the last configure wins. See ROADMAP.
 
-**How does it handle a request body?**
-Only if the policy has an `allow_body` rule. Without one, the body
-callback returns immediately and nothing is buffered. With one, the
-body is accumulated until end of stream and evaluated as
-`{"body": ..., "body_raw": ..., "body_truncated": ...}`.
+**How does it handle a request body?** Only if the policy has an `allow_body` rule. Without one, the body callback returns immediately and nothing is buffered. With one, the body is accumulated until end of stream and evaluated as `{"body": ..., "body_raw": ..., "body_truncated": ...}`.
 
-**Is the alpha label real?**
-Yes. The engine is tested but the public surface will move: export
-names, AST schema, and callback semantics are all still in play before
-1.0. Pin a tag.
+**Is the alpha label real?** Yes. The engine is tested but the public surface will move: export names, AST schema, and callback semantics are all still in play before 1.0. Pin a tag.
 
-**Why Zig?**
-Freestanding wasm with no runtime, no GC, and no allocator you didn't
-ask for, plus explicit allocator passing -- which is what makes the
-"one arena per request, reset at the end" model expressible at all.
+**Why Zig?** Freestanding wasm with no runtime, no GC, and no allocator you didn't ask for, plus explicit allocator passing -- which is what makes the "one arena per request, reset at the end" model expressible at all.
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md). Streaming evaluation runtime,
-proxy-wasm 0.3.x migration, and expanding the OPA conformance
-corpus are the next big items.
+See [ROADMAP.md](ROADMAP.md). Streaming evaluation runtime, proxy-wasm 0.3.x migration, and expanding the OPA conformance corpus are the next big items.
 
 ## Contributing
 
-[CONTRIBUTING.md](CONTRIBUTING.md) covers local setup, code style,
-DCO, and PR expectations.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers local setup, code style, DCO, and PR expectations.
 
 ## Security
 
-[SECURITY.md](SECURITY.md). Use GitHub's private vulnerability
-reporting; don't open a public issue for security bugs.
+[SECURITY.md](SECURITY.md). Use GitHub's private vulnerability reporting; don't open a public issue for security bugs.
 
 ## Acknowledgements
 
 zopa would not exist without:
 
-- [Open Policy Agent][opa] for the Rego language and reference
-  implementation.
-- [Cedar][cedar] for the example of a small, focused authorization
-  language.
+- [Open Policy Agent][opa] for the Rego language and reference implementation.
+- [Cedar][cedar] for the example of a small, focused authorization language.
 - [proxy-wasm/spec][pw] and the Envoy team for the ABI.
 
 ## License
