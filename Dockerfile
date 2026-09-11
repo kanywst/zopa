@@ -6,6 +6,9 @@
 #
 # Layout in the final image:
 #   /zopa.wasm                  -- the proxy-wasm module
+#   /LICENSE, /NOTICE           -- Apache 2.0 requires both to travel
+#                                  with the Work; the image redistributes
+#                                  it on its own, outside this repo.
 #
 # Future PRs add /usr/local/bin/zopa-eval (CLI evaluator) and a
 # vendored wasmtime binary; intentionally out of scope for v1 to
@@ -33,6 +36,7 @@ RUN zig build --release=small
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /src/zig-out/bin/zopa.wasm /zopa.wasm
+COPY LICENSE NOTICE /
 USER nonroot
 LABEL org.opencontainers.image.source="https://github.com/kanywst/zopa"
 LABEL org.opencontainers.image.description="zopa: proxy-wasm authorization engine"

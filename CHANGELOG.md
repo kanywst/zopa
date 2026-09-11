@@ -6,6 +6,24 @@ once the first stable tag ships.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`LICENSE` is the Apache License 2.0 again, byte for byte.** The
+  file shipped since 0.1.0 was a paraphrase: clause 6 (Trademarks)
+  dropped "reasonable and customary use in", and clause 9 (Accepting
+  Warranty or Additional Liability) replaced the "choose to offer, and
+  charge a fee for, acceptance of support, warranty, indemnity, or
+  other liability" grant with different wording. The copyright line in
+  the appendix boilerplate had also been filled in, which is why GitHub
+  reported the repository's license as `NOASSERTION` rather than
+  `Apache-2.0`. The canonical text is now restored verbatim (SHA-256
+  `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30`)
+  and the copyright assertion moved to a new `NOTICE` file, as the
+  appendix instructs. Anyone who redistributed zopa 0.1.0-0.3.0 under
+  the terms in the old file was relying on text that was not Apache
+  2.0; the intended license was always Apache 2.0 and that has not
+  changed.
+
 ## [0.3.0] - 2026-08-20
 
 A hardening release. Every change below exists because some path could
