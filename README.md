@@ -24,8 +24,8 @@ Grab the module and make one decision, in about thirty seconds:
 
 ```bash
 # from a release (cosign-signed, with SLSA provenance)
-curl -fsSLO https://github.com/kanywst/zopa/releases/download/v0.3.0/zopa-v0.3.0.wasm
-mv zopa-v0.3.0.wasm zopa.wasm
+curl -fsSLO https://github.com/kanywst/zopa/releases/download/v0.3.1/zopa-v0.3.1.wasm
+mv zopa-v0.3.1.wasm zopa.wasm
 
 # or from the container image, rebuilt on every push to main
 docker create --name zopa ghcr.io/kanywst/zopa:edge && \
