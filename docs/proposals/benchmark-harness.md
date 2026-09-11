@@ -1,6 +1,6 @@
 # Benchmark harness vs OPA / Cedar
 
-Status: Proposed (draft PR, design doc only).
+Status: **Partially implemented**, and the missing half is the point. `zig build bench` shipped in v0.2.0: a Node latency harness over `bench/fixtures/` reporting p50/p95/p99/mean, running as a smoke job in CI. It measures **zopa only**. The comparison this document exists for — OPA's WASM SDK, an OPA HTTP sidecar, Cedar — is not built, and neither are the memory-floor, cold-start and throughput metrics, nor `bench/results/` checked in from `main`. Until then the README's size claim still has no runtime numbers behind it.
 Tracking: ROADMAP.md → Near term ("Compiled-policy benchmark").
 
 ## Motivation

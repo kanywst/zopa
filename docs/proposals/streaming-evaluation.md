@@ -1,6 +1,6 @@
 # Streaming evaluation
 
-Status: Proposed (draft PR, design doc only).
+Status: **Open.** `src/body_deps.zig`, the configure-time analyser this design is built on, shipped in v0.2.0 and was wired into the shim in v0.3.0 — but it drives the truncated-body deny decision, not streaming. Nothing evaluates incrementally: the body phase still buffers to the 64 KiB cap and denies past it. This is the largest unbuilt design in the directory.
 Tracking: ROADMAP.md → Longer term.
 
 ## Motivation

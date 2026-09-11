@@ -110,6 +110,11 @@ it.
 - Include test coverage for behavior changes. The integration suites
   in `test/` are the right place for most additions.
 - Update `CHANGELOG.md` under the *Unreleased* section.
+- If the change implements a design in `docs/proposals/`, move that
+  file's `Status:` line in the same PR — which release carries it, and
+  which of its goals you left behind. A proposal still reading
+  "Proposed" after its code merges makes the whole directory read as a
+  backlog when it is mostly a record.
 
 ## License
 

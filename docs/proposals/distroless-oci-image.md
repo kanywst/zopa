@@ -1,6 +1,6 @@
 # Distroless OCI image
 
-Status: Proposed (draft PR, design doc only).
+Status: **Implemented**, minus the extra payloads. `.github/workflows/oci.yml` publishes a cosign-signed multi-arch distroless image to `ghcr.io/kanywst/zopa` (`:edge` on every push to main, `:<tag>` and `:latest` on tags), carrying `/zopa.wasm` plus `/LICENSE` and `/NOTICE` as of v0.3.1. The `zopa-eval` CLI and the vendored wasmtime this document sketches were deliberately left out to keep the image small; the `Dockerfile` header records that as out of scope rather than done.
 Tracking: ROADMAP.md → Medium term ("Distroless OCI image").
 
 ## Motivation

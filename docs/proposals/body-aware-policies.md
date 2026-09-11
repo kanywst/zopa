@@ -1,6 +1,6 @@
 # Body-aware policies
 
-Status: Proposed (draft PR, design doc only).
+Status: **Implemented.** The body phase shipped in v0.2.0 — `proxy_on_request_body` evaluates `allow_body` against `{body, body_raw}` once the host signals end of stream, with a 64 KiB buffer cap — and was hardened in v0.3.0: non-final chunks return `StopIterationAndBuffer` so the host accumulates rather than forwarding fragments, `body_truncated` joins the input, and a body over the cap denies whenever the policy reads it. Kept for the reasoning; see `docs/proxy-wasm.md` for what actually shipped.
 Tracking: ROADMAP.md → Near term.
 
 ## Motivation
