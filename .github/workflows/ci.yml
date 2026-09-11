@@ -71,8 +71,30 @@ jobs:
         with:
           node-version: 22
 
-      - name: zig build bench
-        run: zig build bench
+      # Without opa the harness skips both comparison engines and only
+      # times zopa, which would silently stop exercising the agreement
+      # gate -- the part of this job worth running on every PR.
+      - name: install opa
+        run: |
+          curl -L -o /usr/local/bin/opa https://openpolicyagent.org/downloads/v1.16.1/opa_linux_amd64_static
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      # Smoke counts, not real numbers: a shared runner cannot measure a
+      # sub-microsecond p99 meaningfully. This asserts every engine still
+      # builds, runs, and agrees. Publishable numbers come from `zig build
+      # bench` on a quiet machine.
+      - name: bench (smoke)
+        run: |
+          zig build --release=small
+          node bench/run.mjs --quick --json=bench-smoke.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: bench-smoke
+          path: bench-smoke.json
+          if-no-files-found: warn
 
   test-node:
     name: test (node)

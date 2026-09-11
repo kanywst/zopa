@@ -4,9 +4,9 @@ Tiny, zero-allocation authorization engine for proxy-wasm and the edge. ~60 KB. 
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![CI](https://github.com/kanywst/zopa/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/zopa/actions/workflows/ci.yml) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/kanywst/zopa/badge)](https://securityscorecards.dev/viewer/?uri=github.com/kanywst/zopa) [![Zig](https://img.shields.io/badge/zig-0.16.0-orange.svg)](https://ziglang.org)
 
-**What it is:** an authorization engine that fits in a proxy-wasm filter, so you can enforce policy at the edge without putting a 30 MB sidecar next to every proxy.
+**What it is:** an authorization engine that fits in a proxy-wasm filter, so you can enforce policy at the edge without putting a 40 MB sidecar next to every proxy.
 
-**Why it exists:** the usual way to run policy in Envoy is to call out to OPA, or to load OPA's ~30 MB WASM build into the VM. zopa is ~60 KB, allocates from an arena it resets after every request, and answers in single-digit microseconds. You give up the Rego *language* -- zopa runs a compiled Rego-shaped AST, not source -- and keep the decisions.
+**Why it exists:** the usual way to run policy in Envoy is to call out to OPA -- a 40 MB binary and ~23 MB resident next to every proxy, answering in ~140 us over the loopback -- or to compile each policy to its own WASM module with `opa build -t wasm` and load that into the VM. zopa is one ~60 KB module that serves every policy, allocates from an arena it resets after every request, and answers in under a microsecond on simple rules. You give up the Rego *language* -- zopa runs a compiled Rego-shaped AST, not source -- and keep the decisions. See [Numbers](#numbers) for where that trade does and does not pay off; OPA's WASM build is the closer competitor than its size suggests.
 
 Hosts hand it a request input and a policy AST, both as JSON; zopa returns allow, deny, or error. It runs as a [proxy-wasm][pw] filter in Envoy or any other proxy-wasm 0.2.1 host, and the same binary works as a plain `WebAssembly.Module` for hosts that just want to call `evaluate(input, ast)`.
 
@@ -71,21 +71,33 @@ zig build --release=small        # -> zig-out/bin/zopa.wasm, ~60 KB
 
 ## Numbers
 
-Release build, measured on this repository's own benchmark (`zig build bench`, Node host, 10k iterations after 1k warm-up, microseconds):
+Release build against the two things zopa is meant to replace: OPA compiled to WASM and loaded in-process, and OPA run as a sidecar over loopback HTTP. `zig build bench`, Node host, 10k iterations after 1k warm-up. No engine is timed until all of them have returned the same decision for the fixture, so each row is a comparison rather than three unrelated measurements.
 
-| Policy                                        | p50   | p95   | mean  |
-| --------------------------------------------- | ----- | ----- | ----- |
-| literal `allow = true`                        | 1.71  | 2.50  | 1.91  |
-| `input.method == "GET"`                       | 4.67  | 5.17  | 4.74  |
-| default-deny RBAC: path prefix + role + perms | 26.67 | 29.25 | 27.25 |
+Per-decision cost, microseconds:
 
-Artifact size is 61 KB. Every row above is reproducible from a clean checkout, but the machine is a developer laptop -- treat the shape as the signal and re-run `zig build bench` on your own hardware before quoting a number.
+| Policy                                        | zopa     | OPA (wasm) | OPA (sidecar) |
+| --------------------------------------------- | -------- | ---------- | ------------- |
+| literal `allow = true`                        | **0.32** | 0.82       | 133           |
+| `input.method == "GET"`                       | 0.98     | **0.95**   | 140           |
+| default-deny RBAC: path prefix + role + perms | 5.80     | **2.24**   | 145           |
 
-Two caveats worth stating plainly. These are generic-ABI numbers, which means each call re-parses the policy AST -- most of the RBAC row is that parse. The proxy-wasm path compiles the policy once in `proxy_on_configure` and keeps it, so per-request work there is input parsing plus the rule walk. And there is no cross-engine comparison here: asserting "same answer as OPA" needs the conformance corpus to be much wider than it is, and a latency number without that assertion isn't worth printing.
+| | zopa | OPA (wasm) | OPA (sidecar) |
+| --- | --- | --- | --- |
+| deployed artifact | **61 KB**, all policies | 131 KB **per policy** | — |
+| memory after warm-up | 1.4 MB | **128 KB** | 23 MB |
+| cold start | **0.4 ms** | 0.5 ms | 30-63 ms |
+
+Read those honestly, because two rows do not favour zopa:
+
+- **Against a sidecar, either in-process engine wins by ~150x.** That is the claim zopa is built on and it holds with room to spare. It is also the least interesting row: it compares a TCP round trip to a function call.
+- **OPA's WASM build is 2.6x faster than zopa on the realistic policy.** The generic `evaluate` export gets the AST bytes on every call and cannot know they are the ones it parsed last time, so a policy parse sits inside every measurement -- on the RBAC row it is most of the number. The proxy-wasm path builds the policy once in `proxy_on_configure` and keeps it, but no export takes a pre-built policy handle, so the path that would win this row is the one the benchmark cannot reach. Treat the zopa column as an upper bound on in-Envoy cost.
+- **zopa holds more WASM memory than OPA's module does.** The arena is reset with `.retain_capacity`, trading a ~1.4 MB steady-state floor for never calling `memory.grow` again. A smaller binary does not imply a smaller runtime footprint.
+
+Every row is reproducible from a clean checkout, but the machine is a developer laptop: treat the ratios as the signal and re-run `zig build bench` on your own hardware before quoting an absolute number. Full method, and what is deliberately not measured, in [`bench/README.md`](bench/README.md).
 
 ## Why zopa
 
-**Size.** A release build is around 60 KB. OPA's WASM build is two orders of magnitude larger; Cedar and Casbin don't ship as wasm modules at all.
+**Size, and what it actually buys.** A release build is around 60 KB, and it is the *same* 60 KB no matter how many policies you run through it. `opa build -t wasm` produces 134 KB for a one-line policy and 149 KB for a sixty-rule one -- roughly 2x zopa per module, and one module per policy rather than one for the fleet. That is a real advantage but a narrower one than this README used to claim: the ~30 MB figure often quoted for "OPA in WASM" is the OPA *binary* (40 MB here), not what its WASM backend emits. Cedar and Casbin don't ship as wasm modules at all.
 
 **Allocation profile.** Every evaluation runs against a single `std.heap.ArenaAllocator` that is reset with `.retain_capacity` after each call. After a brief warm-up, `memory.grow` doesn't fire again -- the wasm linear memory footprint stays flat regardless of throughput.
 
@@ -251,20 +263,23 @@ python3 -m venv .venv-test
 
 ## Comparison
 
-|                  | [OPA][opa]     | [Cedar][cedar] | [Casbin][casbin] | zopa                       |
-| ---------------- | -------------- | -------------- | ---------------- | -------------------------- |
-| Language         | Go             | Rust           | Go (+ ports)     | Zig                        |
-| Released as wasm | Yes (~30 MB)   | No             | No               | Yes (~60 KB)               |
-| Allocation model | GC             | RC + arenas    | GC               | per-request arena          |
-| proxy-wasm       | Side project   | No             | No               | First-class                |
-| Policy input     | Rego source    | Cedar source   | CSV / source     | Compiled AST (Rego-shaped) |
-| Maturity         | CNCF Graduated | Stable         | Mature           | Alpha                      |
+|                  | [OPA][opa]               | [Cedar][cedar] | [Casbin][casbin] | zopa                       |
+| ---------------- | ------------------------ | -------------- | ---------------- | -------------------------- |
+| Language         | Go                       | Rust           | Go (+ ports)     | Zig                        |
+| Released as wasm | Yes (~134 KB per policy) | No             | No               | Yes (~60 KB, all policies) |
+| Allocation model | GC                       | RC + arenas    | GC               | per-request arena          |
+| proxy-wasm       | Side project             | No             | No               | First-class                |
+| Policy input     | Rego source              | Cedar source   | CSV / source     | Compiled AST (Rego-shaped) |
+| Maturity         | CNCF Graduated           | Stable         | Mature           | Alpha                      |
 
 [opa]: https://www.openpolicyagent.org/
 [cedar]: https://www.cedarpolicy.com/
 [casbin]: https://casbin.org/
 
-zopa is not a replacement for OPA when you need the full Rego language, the management plane, or bundles. It's a drop-in for the narrow case where you've already compiled the policy and want to evaluate it inside a proxy-wasm filter without a 30 MB sidecar.
+zopa is not a replacement for OPA when you need the full Rego
+language, the management plane, or bundles. It's a drop-in for the
+narrow case where you've already compiled the policy and want to
+evaluate it inside a proxy-wasm filter without a 40 MB sidecar.
 
 ## FAQ
 

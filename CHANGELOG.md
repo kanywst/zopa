@@ -4,6 +4,15 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+### Added
+
+- **`zig build bench` compares zopa against OPA.** The harness runs zopa's `evaluate` export, OPA compiled to WASM (`opa build -t wasm`, driven through the `opa_eval` fast path), and OPA as an HTTP sidecar (`opa run --server`) over the same fixtures, and refuses to time anything until all three return the same decision — each fixture already carried both an AST and its Rego, and the harness now checks they agree. Reports p50/p95/p99 minus a measured clock-read floor, an uninstrumented amortised cost, throughput, memory after warm-up, deployed artifact size, and cold start. The OPA engines are skipped and named when no `opa` is on `PATH`, so the step still works without one; CI runs it in `--quick` mode on every PR. No npm dependency: the OPA WASM ABI is bound directly. New fixture `04_deep_nest` drives 24 nested frames at the recursion cap (zopa-only — there is no natural Rego for it).
+
+### Fixed
+
+- **The README's central size claim was wrong by two orders of magnitude, in zopa's favour.** It said OPA's WASM build was "~30 MB" and "two orders of magnitude larger" than zopa. Measured: `opa build -t wasm` emits 134 KB for a one-line policy and 149 KB for a sixty-rule one, against zopa's 63 KB — roughly 2x, not 500x. The ~30 MB figure is the OPA *binary* (40 MB here), which is the right number for the sidecar comparison and the wrong one for the in-VM comparison. Corrected in `README.md` and the engine comparison table. zopa's remaining size advantage is real but different in kind: one module serves every policy, where OPA emits one per policy.
+- **The README's latency table was stale and too pessimistic**, reporting p50s of 1.71 / 4.67 / 26.67 us where the current build measures 0.32 / 0.98 / 5.80. Replaced with the measured numbers alongside both OPA configurations, including the two rows that do not favour zopa: OPA's WASM build is 2.6x faster on the realistic RBAC policy (because `evaluate` re-parses the AST every call), and it holds far less WASM memory (128 KiB against zopa's ~1.4 MiB arena floor).
+
 ## [0.3.1] - 2026-09-12
 
 A licensing correction, and nothing else. No source, AST, or evaluation semantics change: `zig build --release=small` on this tag reproduces the 0.3.0 release artifact byte for byte (SHA-256 `3513c6319aec36fa8a84c96117097189ab0cbac5a557cf444cb55c41924ed34f`). Take this release if you redistribute zopa -- the terms you were passing on were not the ones the project meant to grant. If you only run it, 0.3.0 is the same module.

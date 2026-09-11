@@ -1,0 +1,115 @@
+{
+  "name": "04_deep_nest",
+  "input": {
+    "path": "/api/v2/orders"
+  },
+  "ast": {
+    "type": "module",
+    "rules": [
+      {
+        "type": "rule",
+        "name": "allow",
+        "default": true,
+        "value": {
+          "type": "value",
+          "value": false
+        }
+      },
+      {
+        "type": "rule",
+        "name": "allow",
+        "body": [
+          {
+            "type": "not",
+            "expr": {
+              "type": "not",
+              "expr": {
+                "type": "not",
+                "expr": {
+                  "type": "not",
+                  "expr": {
+                    "type": "not",
+                    "expr": {
+                      "type": "not",
+                      "expr": {
+                        "type": "not",
+                        "expr": {
+                          "type": "not",
+                          "expr": {
+                            "type": "not",
+                            "expr": {
+                              "type": "not",
+                              "expr": {
+                                "type": "not",
+                                "expr": {
+                                  "type": "not",
+                                  "expr": {
+                                    "type": "not",
+                                    "expr": {
+                                      "type": "not",
+                                      "expr": {
+                                        "type": "not",
+                                        "expr": {
+                                          "type": "not",
+                                          "expr": {
+                                            "type": "not",
+                                            "expr": {
+                                              "type": "not",
+                                              "expr": {
+                                                "type": "not",
+                                                "expr": {
+                                                  "type": "not",
+                                                  "expr": {
+                                                    "type": "not",
+                                                    "expr": {
+                                                      "type": "not",
+                                                      "expr": {
+                                                        "type": "not",
+                                                        "expr": {
+                                                          "type": "not",
+                                                          "expr": {
+                                                            "type": "call",
+                                                            "name": "startswith",
+                                                            "args": [
+                                                              {
+                                                                "type": "ref",
+                                                                "path": [
+                                                                  "input",
+                                                                  "path"
+                                                                ]
+                                                              },
+                                                              {
+                                                                "type": "value",
+                                                                "value": "/api/"
+                                                              }
+                                                            ]
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

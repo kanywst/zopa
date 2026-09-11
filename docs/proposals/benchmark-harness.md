@@ -1,6 +1,6 @@
 # Benchmark harness vs OPA / Cedar
 
-Status: **Partially implemented**, and the missing half is the point. `zig build bench` shipped in v0.2.0: a Node latency harness over `bench/fixtures/` reporting p50/p95/p99/mean, running as a smoke job in CI. It measures **zopa only**. The comparison this document exists for — OPA's WASM SDK, an OPA HTTP sidecar, Cedar — is not built, and neither are the memory-floor, cold-start and throughput metrics, nor `bench/results/` checked in from `main`. Until then the README's size claim still has no runtime numbers behind it. Tracking: ROADMAP.md → Near term ("Compiled-policy benchmark").
+Status: **Implemented**, except Cedar and the checked-in result history. Goal 1 minus Cedar and goals 2 and 3 landed after v0.3.1: `bench/run.mjs` runs zopa against OPA-in-wasm (`opa_eval`) and an OPA HTTP sidecar, gated on all engines agreeing on the decision first, and reports p50/p95/p99 plus an uninstrumented amortised cost, throughput, memory after warm-up, deployed artifact size, and cold start. CI runs it in `--quick` mode on every PR. **Cedar is deferred** — no first-party binding is reachable from Node without a dependency, and a second harness in Rust for one engine is not worth maintaining. `bench/results/` committed from `main` (goal 4's second half) is also not built. The numbers, including the two that do not favour zopa, are in [`bench/README.md`](../../bench/README.md). Tracking: ROADMAP.md → Near term ("Compiled-policy benchmark").
 
 ## Motivation
 

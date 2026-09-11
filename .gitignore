@@ -31,3 +31,4 @@ __pycache__/
 CLAUDE.md
 CLAUDE.local.md
 .mcp.json
+bench-smoke.json
