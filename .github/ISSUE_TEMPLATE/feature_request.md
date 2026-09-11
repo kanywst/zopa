@@ -6,13 +6,11 @@ labels: enhancement
 
 ## Problem
 
-What can't you express today, or what's awkward about the current
-shape? Concrete example beats abstract description.
+What can't you express today, or what's awkward about the current shape? Concrete example beats abstract description.
 
 ## Proposal
 
-What you'd like to see. If it's an AST addition, sketch the JSON
-shape and what it should evaluate to.
+What you'd like to see. If it's an AST addition, sketch the JSON shape and what it should evaluate to.
 
 ## Alternatives
 

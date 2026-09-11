@@ -1,19 +1,12 @@
 # Benchmark harness vs OPA / Cedar
 
-Status: **Partially implemented**, and the missing half is the point. `zig build bench` shipped in v0.2.0: a Node latency harness over `bench/fixtures/` reporting p50/p95/p99/mean, running as a smoke job in CI. It measures **zopa only**. The comparison this document exists for — OPA's WASM SDK, an OPA HTTP sidecar, Cedar — is not built, and neither are the memory-floor, cold-start and throughput metrics, nor `bench/results/` checked in from `main`. Until then the README's size claim still has no runtime numbers behind it.
-Tracking: ROADMAP.md → Near term ("Compiled-policy benchmark").
+Status: **Partially implemented**, and the missing half is the point. `zig build bench` shipped in v0.2.0: a Node latency harness over `bench/fixtures/` reporting p50/p95/p99/mean, running as a smoke job in CI. It measures **zopa only**. The comparison this document exists for — OPA's WASM SDK, an OPA HTTP sidecar, Cedar — is not built, and neither are the memory-floor, cold-start and throughput metrics, nor `bench/results/` checked in from `main`. Until then the README's size claim still has no runtime numbers behind it. Tracking: ROADMAP.md → Near term ("Compiled-policy benchmark").
 
 ## Motivation
 
-The README claims zopa is "two orders of magnitude smaller" than OPA's
-WASM build. That's a statement about binary size only. We don't yet
-publish numbers for the things that actually matter at runtime:
-evaluation latency, memory floor, cold-start time, throughput under
-load.
+The README claims zopa is "two orders of magnitude smaller" than OPA's WASM build. That's a statement about binary size only. We don't yet publish numbers for the things that actually matter at runtime: evaluation latency, memory floor, cold-start time, throughput under load.
 
-Without numbers, the project can't honestly recommend itself for a
-production proxy filter, and PRs that touch the eval hot path can
-regress without anyone noticing.
+Without numbers, the project can't honestly recommend itself for a production proxy filter, and PRs that touch the eval hot path can regress without anyone noticing.
 
 ## Goals
 
@@ -32,19 +25,13 @@ regress without anyone noticing.
    - Single header equality.
    - Nested `every` over `input.required_perms`.
    - Worst-case: deeply nested AST near the recursion cap.
-1. CI job that runs a smoke version (low iteration counts) on every
-   PR, full bench on `main` post-merge, results checked into
-   `bench/results/`.
+1. CI job that runs a smoke version (low iteration counts) on every PR, full bench on `main` post-merge, results checked into `bench/results/`.
 
 ## Non-goals
 
-- Comparing to non-CNCF authorization engines (Casbin, Oso, etc).
-  Optional later.
-- Microbenchmarking individual AST nodes. The bench measures the
-  user-facing path, not internal hot loops.
-- Beating OPA on every metric. We expect zopa to win on size and
-  cold-start, lose on Rego coverage. The bench should make that legible,
-  not hide it.
+- Comparing to non-CNCF authorization engines (Casbin, Oso, etc). Optional later.
+- Microbenchmarking individual AST nodes. The bench measures the user-facing path, not internal hot loops.
+- Beating OPA on every metric. We expect zopa to win on size and cold-start, lose on Rego coverage. The bench should make that legible, not hide it.
 
 ## Design sketch
 
@@ -83,36 +70,24 @@ Each fixture carries the same logical policy in three syntaxes:
 }
 ```
 
-The runner loads the fixture, hands each engine the form it expects,
-and asserts every engine returns the same decision before timing
-anything.
+The runner loads the fixture, hands each engine the form it expects, and asserts every engine returns the same decision before timing anything.
 
 ### Metrics format
 
-JSON, one record per (host, fixture, metric) tuple. Aggregated into
-`latest.md` with a small Python script for the README.
+JSON, one record per (host, fixture, metric) tuple. Aggregated into `latest.md` with a small Python script for the README.
 
 ## API impact
 
-None. Bench code lives under `bench/` and never ships in the wasm
-artifact.
+None. Bench code lives under `bench/` and never ships in the wasm artifact.
 
 ## Test plan
 
-- Smoke run in CI on every PR (~5 seconds, low iteration counts) to
-  catch obvious regressions.
-- Full run nightly on `main`, results committed via a GitHub Action
-  with `[skip ci]`.
-- Compare-to-baseline check: fail the CI job if p95 regresses by more
-  than 20% vs the latest committed baseline.
+- Smoke run in CI on every PR (~5 seconds, low iteration counts) to catch obvious regressions.
+- Full run nightly on `main`, results committed via a GitHub Action with `[skip ci]`.
+- Compare-to-baseline check: fail the CI job if p95 regresses by more than 20% vs the latest committed baseline.
 
 ## Open questions
 
-- Where do we host the full nightly results? Inline markdown in the
-  repo is honest but noisy. A `gh-pages` site is more browseable but
-  is more infra to maintain.
-- Should we fix Envoy / OPA / Cedar versions in `bench/Cargo.lock` and
-  bump them deliberately, or follow latest? Pinning is more
-  reproducible; following latest catches upstream regressions.
-- Can the OPA HTTP host be skipped on PR runs and only included
-  nightly? Network-bound benches add variance.
+- Where do we host the full nightly results? Inline markdown in the repo is honest but noisy. A `gh-pages` site is more browseable but is more infra to maintain.
+- Should we fix Envoy / OPA / Cedar versions in `bench/Cargo.lock` and bump them deliberately, or follow latest? Pinning is more reproducible; following latest catches upstream regressions.
+- Can the OPA HTTP host be skipped on PR runs and only included nightly? Network-bound benches add variance.

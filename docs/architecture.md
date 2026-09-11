@@ -18,25 +18,15 @@
 
 ### Two allocators
 
-`host_allocator` is the standard wasm freelist allocator
-(`std.heap.wasm_allocator`). It backs every buffer that crosses the
-host boundary; lifetime is decided by the host.
+`host_allocator` is the standard wasm freelist allocator (`std.heap.wasm_allocator`). It backs every buffer that crosses the host boundary; lifetime is decided by the host.
 
-`request_arena` is a `std.heap.ArenaAllocator` initialised lazily on
-the first call. Every `evaluate()` runs against it and ends with a
-`reset(.retain_capacity)`. Pages stay mapped, so steady-state
-evaluation does not invoke `memory.grow`.
+`request_arena` is a `std.heap.ArenaAllocator` initialised lazily on the first call. Every `evaluate()` runs against it and ends with a `reset(.retain_capacity)`. Pages stay mapped, so steady-state evaluation does not invoke `memory.grow`.
 
 ### Length-prefixed boundary buffers
 
-proxy-wasm hosts call our `malloc(size)` and our `free(ptr)` -- with
-no length on the free side. The standard wasm allocator wants a
-length, so `hostMalloc` reserves `@sizeOf(usize)` bytes in front of
-every block, writes the size there, and returns a pointer to the
-payload. `hostFree` walks back and recovers the size.
+proxy-wasm hosts call our `malloc(size)` and our `free(ptr)` -- with no length on the free side. The standard wasm allocator wants a length, so `hostMalloc` reserves `@sizeOf(usize)` bytes in front of every block, writes the size there, and returns a pointer to the payload. `hostFree` walks back and recovers the size.
 
-The prefix is `usize`-aligned via `alignedAlloc`, so the load is
-safe.
+The prefix is `usize`-aligned via `alignedAlloc`, so the load is safe.
 
 ### Ownership rules
 
@@ -48,11 +38,7 @@ safe.
 | The compiled policy (bytes + AST nodes)                  | Policy arena      | Replaced wholesale on reconfigure        |
 | Borrowed input slices in `evaluate(in_ptr, in_len, ...)` | Host              | Host (we never free these)               |
 
-The single rule that holds it together: a pointer minted by one
-allocator must only be released by the matching free path. The
-proxy-wasm shim is careful to call `memory.hostFree` on host-supplied
-buffers; the evaluator never calls `free` at all -- it leans entirely
-on the arena reset.
+The single rule that holds it together: a pointer minted by one allocator must only be released by the matching free path. The proxy-wasm shim is careful to call `memory.hostFree` on host-supplied buffers; the evaluator never calls `free` at all -- it leans entirely on the arena reset.
 
 ## Request flow
 
@@ -79,37 +65,18 @@ host                                    wasm
 
 ## Evaluation
 
-`evalModule` picks every rule whose name matches the target
-(`"allow"` by default) and OR-combines the bodies. A `default` rule
-remembers its literal value as the fallback if no other rule fires.
+`evalModule` picks every rule whose name matches the target (`"allow"` by default) and OR-combines the bodies. A `default` rule remembers its literal value as the fallback if no other rule fires.
 
 Bodies are an implicit AND. Every expression in the body must hold.
 
-`compare` resolves both sides to `Value` via `resolveValue`, which
-also handles nested `not` and `compare` (folded back to `boolean`).
-Nested iterators (`some` / `every` inside a body or as a value)
-follow the same path.
+`compare` resolves both sides to `Value` via `resolveValue`, which also handles nested `not` and `compare` (folded back to `boolean`). Nested iterators (`some` / `every` inside a body or as a value) follow the same path.
 
-Variable bindings introduced by `some` / `every` live in a stack-
-allocated `Scope` linked list. Each iterator pushes a frame for the
-duration of one body evaluation; refs walk the chain before falling
-back to the input root.
+Variable bindings introduced by `some` / `every` live in a stack-allocated `Scope` linked list. Each iterator pushes a frame for the duration of one body evaluation; refs walk the chain before falling back to the input root.
 
-Scope is local to the iterator. Bindings introduced inside a rule
-body are not visible from that rule's `value` expression -- the
-value is resolved with a fresh, empty scope. A policy that needs to
-reference a body-bound variable from `value` must move the
-computation inside the body or restructure to compute the value
-inline. Lifting body bindings into the value position is on the
-roadmap.
+Scope is local to the iterator. Bindings introduced inside a rule body are not visible from that rule's `value` expression -- the value is resolved with a fresh, empty scope. A policy that needs to reference a body-bound variable from `value` must move the computation inside the body or restructure to compute the value inline. Lifting body bindings into the value position is on the roadmap.
 
-Recursion is capped at `max_eval_depth = 32`. Hitting the cap returns
-`error.EvalTooDeep`, which the export wrapper folds to `-1` and the
-proxy-wasm shim treats as deny.
+Recursion is capped at `max_eval_depth = 32`. Hitting the cap returns `error.EvalTooDeep`, which the export wrapper folds to `-1` and the proxy-wasm shim treats as deny.
 
 ## Why `wasm32-freestanding`
 
-WASI would pull in syscall stubs we never use. `freestanding` keeps
-the binary tight and the import surface minimal -- the host only
-needs to provide the proxy-wasm imports we declare in
-`proxy_wasm.zig`.
+WASI would pull in syscall stubs we never use. `freestanding` keeps the binary tight and the import surface minimal -- the host only needs to provide the proxy-wasm imports we declare in `proxy_wasm.zig`.

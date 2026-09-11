@@ -1,50 +1,34 @@
 # Distroless OCI image
 
-Status: **Implemented**, minus the extra payloads. `.github/workflows/oci.yml` publishes a cosign-signed multi-arch distroless image to `ghcr.io/kanywst/zopa` (`:edge` on every push to main, `:<tag>` and `:latest` on tags), carrying `/zopa.wasm` plus `/LICENSE` and `/NOTICE` as of v0.3.1. The `zopa-eval` CLI and the vendored wasmtime this document sketches were deliberately left out to keep the image small; the `Dockerfile` header records that as out of scope rather than done.
-Tracking: ROADMAP.md → Medium term ("Distroless OCI image").
+Status: **Implemented**, minus the extra payloads. `.github/workflows/oci.yml` publishes a cosign-signed multi-arch distroless image to `ghcr.io/kanywst/zopa` (`:edge` on every push to main, `:<tag>` and `:latest` on tags), carrying `/zopa.wasm` plus `/LICENSE` and `/NOTICE` as of v0.3.1. The `zopa-eval` CLI and the vendored wasmtime this document sketches were deliberately left out to keep the image small; the `Dockerfile` header records that as out of scope rather than done. Tracking: ROADMAP.md → Medium term ("Distroless OCI image").
 
 ## Motivation
 
-Today the only release artifact is `zopa-<tag>.wasm` plus its SLSA
-provenance and cosign signature. That works when the user already has
-Envoy and just wants to drop in the wasm file. It doesn't help when:
+Today the only release artifact is `zopa-<tag>.wasm` plus its SLSA provenance and cosign signature. That works when the user already has Envoy and just wants to drop in the wasm file. It doesn't help when:
 
-- A platform team wants to pin "the wasm + a known-good runtime to
-  test it against" as a single immutable reference.
-- A CI pipeline needs to validate a policy AST without installing
-  anything except `docker run`.
-- A Kubernetes operator wants to mount the wasm into Envoy via an
-  initContainer, which is much cleaner with an OCI image than with
-  raw HTTP downloads.
+- A platform team wants to pin "the wasm + a known-good runtime to test it against" as a single immutable reference.
+- A CI pipeline needs to validate a policy AST without installing anything except `docker run`.
+- A Kubernetes operator wants to mount the wasm into Envoy via an initContainer, which is much cleaner with an OCI image than with raw HTTP downloads.
 
-A small, signed OCI image with the `.wasm` and a tiny CLI for ad-hoc
-evaluation closes the gap.
+A small, signed OCI image with the `.wasm` and a tiny CLI for ad-hoc evaluation closes the gap.
 
 ## Goals
 
-1. Multi-stage Dockerfile producing a `FROM scratch` (or distroless
-   base) image:
+1. Multi-stage Dockerfile producing a `FROM scratch` (or distroless base) image:
    - `/zopa.wasm` at the path proxy-wasm hosts expect.
-   - `/usr/local/bin/zopa-eval` (statically linked) that runs
-     `evaluate(input.json, ast.json)` on stdin / argv.
-   - `/usr/local/bin/wasmtime` (vendored at a pinned version) for
-     hosts that want to confirm the wasm boots before mounting.
+   - `/usr/local/bin/zopa-eval` (statically linked) that runs `evaluate(input.json, ast.json)` on stdin / argv.
+   - `/usr/local/bin/wasmtime` (vendored at a pinned version) for hosts that want to confirm the wasm boots before mounting.
 1. CI workflow `.github/workflows/oci.yml`:
    - Builds on `v*` tags and on `main`.
    - Pushes to `ghcr.io/kanywst/zopa:<tag>` and `:edge`.
    - Multi-arch: `linux/amd64`, `linux/arm64`.
-   - Cosign keyless signing of the image manifest, attaching the same
-     SLSA v1.0 provenance generator already used for the wasm.
-1. Image metadata declares the wasm hash and the proxy-wasm ABI
-   version via OCI labels (`org.opencontainers.image.*` plus
-   `tech.zopa.proxy-wasm-version`).
+   - Cosign keyless signing of the image manifest, attaching the same SLSA v1.0 provenance generator already used for the wasm.
+1. Image metadata declares the wasm hash and the proxy-wasm ABI version via OCI labels (`org.opencontainers.image.*` plus `tech.zopa.proxy-wasm-version`).
 
 ## Non-goals
 
-- Bundling Envoy or any runtime that proxies traffic. The image is a
-  carrier for the wasm and a CLI evaluator, not a server.
-- A Helm chart, operator, or CRD. The image is one ingredient; how to
-  deploy is downstream.
+- Bundling Envoy or any runtime that proxies traffic. The image is a carrier for the wasm and a CLI evaluator, not a server.
+- A Helm chart, operator, or CRD. The image is one ingredient; how to deploy is downstream.
 - Supporting Windows containers. Out of scope.
 
 ## Design sketch
@@ -72,17 +56,14 @@ LABEL tech.zopa.proxy-wasm-version=0.2.1
 
 Base candidates:
 
-- `gcr.io/distroless/static-debian12:nonroot` (recommended; familiar,
-  gets CVE feeds via Google).
+- `gcr.io/distroless/static-debian12:nonroot` (recommended; familiar, gets CVE feeds via Google).
 - `cgr.dev/chainguard/static:latest` (smaller, signed by Chainguard).
 
 Pick one in the implementation PR, document the rationale.
 
 ### `zopa-eval` CLI
 
-A new build target in `build.zig` that targets the host architecture
-and links a thin `main` around the same `evaluate` function the wasm
-exports:
+A new build target in `build.zig` that targets the host architecture and links a thin `main` around the same `evaluate` function the wasm exports:
 
 ```bash
 $ echo '{"user":{"role":"admin"}}' | \
@@ -90,9 +71,7 @@ $ echo '{"user":{"role":"admin"}}' | \
 1
 ```
 
-Exit codes mirror the wasm: `0` allow, `1` deny, `2` error. (The
-inversion vs the wasm `i32` is intentional; CLI conventions use 0
-for success.)
+Exit codes mirror the wasm: `0` allow, `1` deny, `2` error. (The inversion vs the wasm `i32` is intentional; CLI conventions use 0 for success.)
 
 ## API impact
 
@@ -102,23 +81,12 @@ for success.)
 
 ## Test plan
 
-- CI builds the image on every PR (no push), runs `docker run --rm
-  ghcr.io/kanywst/zopa:edge --version` as a smoke test.
-- A `tools/verify-image.sh` script that pulls the latest image,
-  cosign-verifies it, and runs the smoke test. Used in release
-  validation.
-- Conformance harness (see `opa-conformance-harness.md`) gains an
-  optional `--image` mode that runs zopa via the OCI image instead of
-  the host build.
+- CI builds the image on every PR (no push), runs `docker run --rm ghcr.io/kanywst/zopa:edge --version` as a smoke test.
+- A `tools/verify-image.sh` script that pulls the latest image, cosign-verifies it, and runs the smoke test. Used in release validation.
+- Conformance harness (see `opa-conformance-harness.md`) gains an optional `--image` mode that runs zopa via the OCI image instead of the host build.
 
 ## Open questions
 
-- Which distroless variant? Default is `static-debian12:nonroot`;
-  Chainguard's `static` is smaller but adds an external dependency.
-- Should `wasmtime` be vendored in the image at all? It nearly
-  doubles the image size. Argument for: lets users confirm the wasm
-  boots without installing anything. Argument against: the image
-  is no longer minimal.
-- Tag policy: `:edge` for `main`, `:vX.Y.Z` for tags, `:latest` aliases
-  the highest semver. The aliasing is contentious; revisit on the
-  first stable release.
+- Which distroless variant? Default is `static-debian12:nonroot`; Chainguard's `static` is smaller but adds an external dependency.
+- Should `wasmtime` be vendored in the image at all? It nearly doubles the image size. Argument for: lets users confirm the wasm boots without installing anything. Argument against: the image is no longer minimal.
+- Tag policy: `:edge` for `main`, `:vX.Y.Z` for tags, `:latest` aliases the highest semver. The aliasing is contentious; revisit on the first stable release.

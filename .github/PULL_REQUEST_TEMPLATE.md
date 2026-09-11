@@ -13,8 +13,7 @@ What changed and any non-obvious decisions.
 ## Tests
 
 - [ ] `zig build test` passes
-- [ ] `zig build test-wasmtime` passes (or skipped because Python deps
-      aren't set up)
+- [ ] `zig build test-wasmtime` passes (or skipped because Python deps aren't set up)
 - [ ] Added/updated test cases under `test/` for behaviour changes
 
 ## Checklist

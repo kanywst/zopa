@@ -10,8 +10,7 @@ What went wrong, in one sentence.
 
 ## Reproduction
 
-Smallest input + AST + expected vs. actual decision. Paste the
-`evaluate(...)` return code or the HTTP status from your proxy.
+Smallest input + AST + expected vs. actual decision. Paste the `evaluate(...)` return code or the HTTP status from your proxy.
 
 ```json
 // input
@@ -30,5 +29,4 @@ Smallest input + AST + expected vs. actual decision. Paste the
 
 ## Logs
 
-If the issue is host-side (Envoy returning the wrong status, etc.),
-attach the relevant `proxy_log` lines or stderr.
+If the issue is host-side (Envoy returning the wrong status, etc.), attach the relevant `proxy_log` lines or stderr.
