@@ -361,6 +361,31 @@ test "a slot whose generation is exhausted is retired, not wrapped" {
     try testing.expectEqual(@as(usize, 2), registry.slots.items.len);
 }
 
+test "the table refuses to grow past what the index field can address" {
+    var registry: Registry = .{ .gpa = testing.allocator };
+    defer registry.deinit();
+
+    // Fill the table with retired slots -- empty, so `deinit` has
+    // nothing to free, and at max generation, so `install` will not
+    // reuse them and has to fall through to appending. Compiling 65535
+    // real policies to reach this path is not necessary.
+    try registry.slots.appendNTimes(
+        testing.allocator,
+        .{ .entry = null, .generation = max_generation },
+        max_slots,
+    );
+    try testing.expectError(Error.TooManyPolicies, registry.compile(rbac_policy));
+
+    // The reason the cap is where it is: one slot lower still encodes
+    // inside the index field, and one higher would spill into the
+    // generation bits and manufacture exactly the handle collision the
+    // generation counter exists to prevent.
+    const last = encode(max_slots - 1, 1);
+    try testing.expectEqual(@as(u32, index_mask), last & index_mask);
+    try testing.expectEqual(@as(u32, 1), last >> index_bits);
+    try testing.expectEqual(max_slots, @as(usize, encode(max_slots - 1, 1) & index_mask));
+}
+
 test "a policy that will not build leaves no handle and no leak" {
     var registry: Registry = .{ .gpa = testing.allocator };
     defer registry.deinit();
