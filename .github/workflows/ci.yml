@@ -124,6 +124,13 @@ jobs:
       # slow today. The gate is wide on purpose: it exists to catch
       # something like a per-request policy parse creeping back into the
       # compiled path, not to police a few percent of drift.
+      # The gate's own exit-code contract, before it is trusted to gate
+      # anything: pass, regressed, reference-engine-missing, and
+      # nothing-overlapped are each asserted rather than left to the
+      # comment beside them.
+      - name: test the regression gate
+        run: node --test bench/compare.test.mjs
+
       - name: check for a performance regression
         run: node bench/compare.mjs bench-smoke.json bench/results/baseline.json
 

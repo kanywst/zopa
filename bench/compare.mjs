@@ -39,9 +39,14 @@ function ratios(run) {
   }
   for (const [fixture, engines] of byFixture) {
     const ref = engines.get(REFERENCE);
-    if (ref === undefined || !(ref > 0)) continue;
+    // Finite and positive. `Infinity` is a real result row rather than a
+    // skipped engine -- it is what a `throughput()` window that counted
+    // zero iterations produces -- and `Infinity > 0` would sail through
+    // a bare positivity check, leaving every other engine's ratio 0.
+    if (!Number.isFinite(ref) || ref <= 0) continue;
     for (const [engine, cost] of engines) {
       if (engine === REFERENCE) continue;
+      if (!Number.isFinite(cost)) continue;
       out[`${fixture}/${engine}`] = cost / ref;
     }
   }
