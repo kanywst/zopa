@@ -28,6 +28,7 @@ const max_builtin_args: usize = 8;
 /// Explicit error set; needed because the recursive helpers form a
 /// cycle that the compiler can't infer through.
 const HelperError = error{
+    AssignOutsideBody,
     EvalTooDeep,
     PathNotObject,
     PathNotFound,
@@ -200,8 +201,42 @@ fn evalBundle(
 
 /// Bodies are an implicit AND of expressions.
 fn evalBody(body: []const *const ast.Expr, input: json.Value) !bool {
-    for (body) |expr| {
-        if (!try evalExprBool(expr, input, null, 0)) return false;
+    return evalBodyScoped(body, input, null, 0);
+}
+
+/// Evaluate the conjunction, carrying bindings forward.
+///
+/// Recursive rather than a flat loop because `assign` scopes over its
+/// *siblings*: `x := input.x` has to be visible to every expression
+/// after it, so the rest of the body is evaluated inside a frame the
+/// assignment pushes. `some` and `every` do not need this -- each owns
+/// the single expression it binds over -- which is why the scope chain
+/// existed without it until now.
+fn evalBodyScoped(
+    body: []const *const ast.Expr,
+    input: json.Value,
+    scope: ?*const Scope,
+    depth: u32,
+) HelperError!bool {
+    if (depth >= max_eval_depth) return error.EvalTooDeep;
+    for (body, 0..) |expr, i| {
+        switch (expr.*) {
+            .assign => |a| {
+                // A binding whose value is undefined makes the body
+                // undefined, same as any other unresolved ref: deny
+                // rather than binding null and carrying on, which would
+                // let `x := input.missing` silently compare equal to
+                // another missing field.
+                const bound = resolveValue(a.value, input, scope, depth + 1) catch |err| switch (err) {
+                    error.PathNotFound, error.PathNotObject => return false,
+                    else => return err,
+                };
+                if (bound == .nil) return false;
+                const child = Scope{ .parent = scope, .name = a.var_name, .bound = bound };
+                return evalBodyScoped(body[i + 1 ..], input, &child, depth + 1);
+            },
+            else => if (!try evalExprBool(expr, input, scope, depth)) return false,
+        }
     }
     return true;
 }
@@ -233,6 +268,10 @@ fn evalExprBool(
         .some => |it| try evalSome(it, input, scope, depth + 1),
         .every => |it| try evalEvery(it, input, scope, depth + 1),
         .call => |c| truthy(try evalCall(c, input, scope, depth + 1)),
+        // Only meaningful as a body statement, where `evalBodyScoped`
+        // handles it. Reached here it would have nothing to scope over,
+        // so it is an error rather than a silent truth.
+        .assign => error.AssignOutsideBody,
     };
 }
 
@@ -373,6 +412,7 @@ fn resolveValue(
         .some => |it| .{ .boolean = try evalSome(it, input, scope, depth + 1) },
         .every => |it| .{ .boolean = try evalEvery(it, input, scope, depth + 1) },
         .call => |c| try evalCall(c, input, scope, depth + 1),
+        .assign => return error.AssignOutsideBody,
     };
 }
 
@@ -500,6 +540,120 @@ test "ref: an index is not the string key that spells it" {
     try testing.expect(try evaluate(&arena, object_input, by_key));
     try testing.expect(try evaluate(&arena, array_input, by_index));
     try testing.expect(!try evaluate(&arena, array_input, by_key));
+}
+
+test "assign: binds for the rest of the body" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const policy =
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","body":[
+        \\  {"type":"assign","var":"role","value":{"type":"ref","path":["input","user","role"]}},
+        \\  {"type":"compare","op":"eq",
+        \\   "left":{"type":"ref","path":["role"]},
+        \\   "right":{"type":"value","value":"admin"}}]}]}
+    ;
+
+    try testing.expect(try evaluate(&arena, "{\"user\":{\"role\":\"admin\"}}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"user\":{\"role\":\"guest\"}}", policy));
+    // An undefined binding makes the body undefined rather than binding
+    // null: otherwise `x := input.missing` would compare equal to
+    // another missing field and quietly hold.
+    try testing.expect(!try evaluate(&arena, "{}", policy));
+}
+
+test "assign: a later binding shadows an earlier one" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const policy =
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","body":[
+        \\  {"type":"assign","var":"x","value":{"type":"value","value":1}},
+        \\  {"type":"assign","var":"x","value":{"type":"value","value":2}},
+        \\  {"type":"compare","op":"eq",
+        \\   "left":{"type":"ref","path":["x"]},
+        \\   "right":{"type":"value","value":2}}]}]}
+    ;
+    try testing.expect(try evaluate(&arena, "{}", policy));
+}
+
+test "assign: the binding does not leak past its own body" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // Two rules for one name. The first binds `v`; the second must not
+    // see it, and resolves `v` against the input instead -- where it is
+    // missing, so that definition does not hold.
+    const policy =
+        \\{"type":"modules","modules":[{"type":"module","rules":[
+        \\  {"type":"rule","name":"allow","default":true,"value":{"type":"value","value":false}},
+        \\  {"type":"rule","name":"allow","body":[
+        \\    {"type":"assign","var":"v","value":{"type":"value","value":1}},
+        \\    {"type":"compare","op":"eq","left":{"type":"ref","path":["v"]},
+        \\     "right":{"type":"value","value":99}}]},
+        \\  {"type":"rule","name":"allow","body":[
+        \\    {"type":"compare","op":"eq","left":{"type":"ref","path":["v"]},
+        \\     "right":{"type":"value","value":1}}]}]}]}
+    ;
+    try testing.expect(!try evaluate(&arena, "{}", policy));
+}
+
+test "assign: a value binds inside some/every too" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // The assignment sees the iteration variable, and the comparison
+    // after it sees both.
+    const policy =
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","body":[
+        \\  {"type":"assign","var":"want","value":{"type":"ref","path":["input","want"]}},
+        \\  {"type":"some","var":"g","source":{"type":"ref","path":["input","xs"]},
+        \\   "body":{"type":"compare","op":"eq",
+        \\           "left":{"type":"ref","path":["g"]},
+        \\           "right":{"type":"ref","path":["want"]}}}]}]}
+    ;
+    try testing.expect(try evaluate(&arena, "{\"want\":\"b\",\"xs\":[\"a\",\"b\"]}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"want\":\"z\",\"xs\":[\"a\",\"b\"]}", policy));
+}
+
+test "assign: a trailing binding holds, matching Rego" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // `allow if { x := 1 }` is true in OPA -- an assignment succeeds
+    // when its right-hand side is defined -- and checked against
+    // `opa eval` before writing this. A body ending in a binding is
+    // pointless but not false.
+    const defined =
+        \\{"type":"assign","var":"x","value":{"type":"value","value":1}}
+    ;
+    try testing.expect(try evaluate(&arena, "{}", defined));
+
+    // Undefined right-hand side, and the body is undefined with it.
+    const undefined_rhs =
+        \\{"type":"assign","var":"x","value":{"type":"ref","path":["input","missing"]}}
+    ;
+    try testing.expect(!try evaluate(&arena, "{}", undefined_rhs));
+}
+
+test "assign: nested where it cannot scope, it is an error" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // Inside `not` there is no body for the binding to cover, so it
+    // cannot mean anything. Erroring surfaces as -1, which every caller
+    // denies on -- better than a binding that silently evaporates.
+    const negated =
+        \\{"type":"not","expr":{"type":"assign","var":"x","value":{"type":"value","value":1}}}
+    ;
+    try testing.expectError(error.AssignOutsideBody, evaluate(&arena, "{}", negated));
+
+    // Same as the body of a `some`.
+    const as_iter_body =
+        \\{"type":"some","var":"g","source":{"type":"value","value":[1]},
+        \\ "body":{"type":"assign","var":"x","value":{"type":"value","value":1}}}
+    ;
+    try testing.expectError(error.AssignOutsideBody, evaluate(&arena, "{}", as_iter_body));
 }
 
 test "ref: a long plain-key path is not capped by the recursion budget" {

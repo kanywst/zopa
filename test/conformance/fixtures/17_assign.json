@@ -1,0 +1,11 @@
+{
+  "name":  "assign",
+  "note":  "`:=` binds for the rest of the body. Cases cover a hit, a miss, and an undefined right-hand side, which makes the body undefined rather than binding null -- otherwise `x := input.missing` would compare equal to another missing field and quietly hold.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if {\n\trole := input.user.role\n\trole == \"admin\"\n}\n",
+  "cases": [
+    { "input": { "user": { "role": "admin" } }, "expected": 1 },
+    { "input": { "user": { "role": "guest" } }, "expected": 0 },
+    { "input": { "user": {} },                  "expected": 0 },
+    { "input": {},                              "expected": 0 }
+  ]
+}

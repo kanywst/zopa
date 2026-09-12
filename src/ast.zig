@@ -41,6 +41,7 @@ pub const Expr = union(enum) {
     some: Iter,
     every: Iter,
     call: Call,
+    assign: Assign,
 
     /// Largest accepted array index, fixed rather than
     /// `maxInt(usize)`.
@@ -72,6 +73,16 @@ pub const Expr = union(enum) {
                 .index => false,
             };
         }
+    };
+
+    /// `x := <expr>` in a rule body. The binding is visible to every
+    /// expression *after* it in the same body, which is what makes this
+    /// a body-level construct rather than another `Iter`: `some` and
+    /// `every` own the single expression they bind over, while an
+    /// assignment scopes over its siblings.
+    pub const Assign = struct {
+        var_name: []const u8,
+        value: *const Expr,
     };
 
     pub const Compare = struct {
@@ -314,6 +325,15 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
             };
         }
         expr.* = .{ .ref = parts };
+    } else if (std.mem.eql(u8, t, "assign")) {
+        const var_v = try requireField(obj, "var");
+        if (var_v != .string) return error.InvalidVar;
+        if (var_v.string.len == 0) return error.InvalidVar;
+        const value_v = try requireField(obj, "value");
+        expr.* = .{ .assign = .{
+            .var_name = var_v.string,
+            .value = try buildExpr(allocator, value_v),
+        } };
     } else if (std.mem.eql(u8, t, "compare") or CompareOp.fromString(t) != null) {
         const op = if (std.mem.eql(u8, t, "compare")) op_blk: {
             const op_v = try requireField(obj, "op");

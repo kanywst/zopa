@@ -4,6 +4,16 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+### Added
+
+- **`:=` assignment in a rule body.** `role := input.user.role` binds a name visible to every expression after it in the same body -- the last of the two Rego idioms the coverage table named as practically missing. `zig build test-coverage` goes 34/49 to 36/51.
+
+  Bodies are now evaluated recursively rather than as a flat loop, because an assignment scopes over its **siblings** where `some` and `every` own the single expression they bind over. That distinction is why the scope chain existed for four releases without needing this.
+
+  A binding whose right-hand side is undefined makes the body undefined rather than binding null: otherwise `x := input.missing` would compare equal to another missing field and quietly hold. A body ending in a binding still holds, matching Rego (`allow if { x := 1 }` is true, checked against `opa eval`), but nested where there is nothing to scope over -- inside `not`, or as a `some` body -- it is an error and denies. Destructuring targets are refused by the converter.
+
+  `body_deps` sees through a binding, so `x := input.body.amount` still counts as reading the body. Missing that would have classified such a policy as touching nothing and let the shim evaluate it against a truncated prefix -- the fail-open that analyser exists to prevent, arriving through a node that postdates it. Release build: ~64 KB, up 763 bytes.
+
 ### Fixed
 
 - **The SBOM step never checked what it scanned.** Its hash guard proves the document names the right artifact and says nothing about how it was produced -- so an input rename in a future `sbom-action`, or an accidental default to the workspace, would publish the ~60 Actions and `.zig-cache` false positives the whole design exists to avoid, with every other check still passing. It now asserts zero dependency components (which is the answer, since `build.zig.zon` declares none) and prints what it found when that fails. The Apache-2.0 claim is now gated on `LICENSE` hashing to the canonical Apache License 2.0 -- reading the id back out of the document it just wrote proved nothing, and a substring match on "Apache License" would have accepted Apache 1.1. That also keeps the v0.4.1 restoration honest: an edited LICENSE fails the release rather than being signed as Apache-2.0. `file:` was also verified to be a real input of `anchore/sbom-action` at the pinned commit, not silently ignored.

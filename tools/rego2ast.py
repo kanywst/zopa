@@ -207,6 +207,29 @@ def walk_call_form(terms: list[dict[str, Any]]) -> dict[str, Any]:
             "right": walk_term(args[1]),
         }
 
+    if op_name == "assign":
+        # `x := <expr>`. OPA spells it as a two-argument call whose
+        # first argument is the variable being bound.
+        if len(args) != 2:
+            raise Unsupported(f"assign expects 2 args, got {len(args)}")
+        target = args[0]
+        if target.get("type") != "var":
+            raise Unsupported(
+                "assignment target must be a plain variable; destructuring is not supported"
+            )
+        name = target["value"]
+        # OPA rewrites `_` and some desugared forms into generated names
+        # like `__local0__`. Those come from constructs zopa refuses
+        # elsewhere, so seeing one here means something was desugared
+        # into an assignment rather than written as one.
+        if name.startswith("__") or name == "_":
+            raise Unsupported(f"generated assignment target `{name}` (desugared construct)")
+        return {
+            "type": "assign",
+            "var": name,
+            "value": walk_term(args[1]),
+        }
+
     if op_name in BUILTINS:
         return {
             "type": "call",

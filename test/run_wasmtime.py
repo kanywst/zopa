@@ -1002,6 +1002,51 @@ for label, seg in (("negative", -1), ("fractional", 1.5), ("boolean", True)):
         -1,
     )
 
+# ---------------------------------------------------------------------------
+# `assign`: a binding visible to the rest of the body. Bound here too so
+# a divergence between wasmtime and Node in how the scope chain carries
+# forward is caught, which is why this suite exists separately.
+# ---------------------------------------------------------------------------
+assign_policy = {
+    "type": "module",
+    "rules": [
+        {
+            "type": "rule",
+            "name": "allow",
+            "default": True,
+            "value": {"type": "value", "value": False},
+        },
+        {
+            "type": "rule",
+            "name": "allow",
+            "body": [
+                {
+                    "type": "assign",
+                    "var": "role",
+                    "value": {"type": "ref", "path": ["input", "user", "role"]},
+                },
+                {
+                    "type": "compare",
+                    "op": "eq",
+                    "left": {"type": "ref", "path": ["role"]},
+                    "right": {"type": "value", "value": "admin"},
+                },
+            ],
+        },
+    ],
+}
+
+check("assign: bound value is visible later", decide({"user": {"role": "admin"}}, assign_policy), 1)
+check("assign: wrong value denies", decide({"user": {"role": "guest"}}, assign_policy), 0)
+# Undefined right-hand side makes the body undefined rather than binding
+# null, or `x := input.missing` would equal another missing field.
+check("assign: undefined right-hand side denies", decide({}, assign_policy), 0)
+check(
+    "assign: nested under not -> -1",
+    decide({}, {"type": "not", "expr": {"type": "assign", "var": "x", "value": {"type": "value", "value": 1}}}),
+    -1,
+)
+
 if failed:
     print(f"\n{failed} test(s) failed", file=sys.stderr)
     sys.exit(1)
