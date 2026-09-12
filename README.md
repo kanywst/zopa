@@ -77,11 +77,11 @@ zopa appears twice, because the two generic-ABI shapes cost very different amoun
 
 Per-decision cost, microseconds:
 
-| Policy                                        | zopa (evaluate) | zopa (compiled) | OPA (wasm) | OPA (sidecar) |
-| --------------------------------------------- | --------------- | --------------- | ---------- | ------------- |
-| literal `allow = true`                        | 0.36            | **0.08**        | 0.82       | 138           |
-| `input.method == "GET"`                       | 0.97            | **0.19**        | 0.96       | 132           |
-| default-deny RBAC: path prefix + role + perms | 5.76            | **1.32**        | 2.24       | 149           |
+| Policy                                        | zopa (evaluate) | zopa (compiled) | OPA (wasm) | Cedar (wasm) | OPA (sidecar) |
+| --------------------------------------------- | --------------- | --------------- | ---------- | ------------ | ------------- |
+| literal `allow = true`                        | 0.34            | **0.08**        | 1.27       | 13.0         | 176           |
+| `input.method == "GET"`                       | 1.05            | **0.21**        | 1.09       | 15.7         | 171           |
+| default-deny RBAC: path prefix + role + perms | 7.20            | **1.57**        | 2.52       | 77.2         | 183           |
 
 | | zopa | OPA (wasm) | OPA (sidecar) |
 | --- | --- | --- | --- |
@@ -94,6 +94,7 @@ What those say:
 - **Compile the policy once if you serve traffic.** The gap between the two zopa columns is the AST parse and nothing else: 4.4 µs of the 5.76 on the RBAC row. `evaluate` is for tests, one-shot callers, and hosts that genuinely get a different policy every time.
 - **Held that way, zopa is faster than OPA's wasm build on every fixture,** and 1.7x faster on the realistic one. Through `evaluate` it was 2.6x slower on that same row -- the parse was the whole difference.
 - **Against a sidecar, either in-process engine wins by ~100x.** That is the claim zopa is built on. It is also the least interesting row: it compares a TCP round trip to a function call.
+- **The Cedar column is not a verdict on Cedar.** Its policy set is preparsed, so this is not a parse cost; what remains is mostly the wasm-bindgen serialisation boundary that `@cedar-policy/cedar-wasm` puts between Node and the evaluator. It measures Cedar *through its WASM binding*, which is the only way to reach it from Node. A native embedding would look different.
 - **zopa holds more WASM memory than OPA's module does** -- ~1.4 MB against 128 KB. The arena is reset with `.retain_capacity`, trading a steady-state floor for never calling `memory.grow` again. A smaller binary does not imply a smaller runtime footprint.
 
 Every row is reproducible from a clean checkout, but the machine is a developer laptop: treat the ratios as the signal and re-run `zig build bench` on your own hardware before quoting an absolute number. Full method, and what is deliberately not measured, in [`bench/README.md`](bench/README.md).

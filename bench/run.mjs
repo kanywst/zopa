@@ -19,9 +19,10 @@ import * as zopa from './engines/zopa.mjs';
 import * as zopaCompiled from './engines/zopa-compiled.mjs';
 import * as opaWasm from './engines/opa-wasm.mjs';
 import * as opaHttp from './engines/opa-http.mjs';
+import * as cedar from './engines/cedar.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ALL_ENGINES = [zopa, zopaCompiled, opaWasm, opaHttp];
+const ALL_ENGINES = [zopa, zopaCompiled, opaWasm, opaHttp, cedar];
 
 // ---------------------------------------------------------------- args
 

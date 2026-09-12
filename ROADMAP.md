@@ -40,7 +40,7 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 
 ## Near term
 
-- **Cross-engine benchmark.** `zig build bench` now runs zopa (both generic-ABI shapes), OPA compiled to wasm, and an OPA HTTP sidecar over the same fixtures, gated on every engine agreeing on the decision before anything is timed. Reports p50/p95/p99, an uninstrumented amortised cost, throughput, memory after warm-up, deployed artifact size, and cold start. Numbers and caveats in [`bench/README.md`](bench/README.md).
+- **Cross-engine benchmark.** `zig build bench` now runs zopa (both generic-ABI shapes), OPA compiled to wasm, an OPA HTTP sidecar, and Cedar over the same fixtures, gated on every engine agreeing on the decision before anything is timed. Reports p50/p95/p99, an uninstrumented amortised cost, throughput, memory after warm-up, deployed artifact size, and cold start. Numbers and caveats in [`bench/README.md`](bench/README.md).
 - **Compiled-policy export.** `policy_compile` / `policy_release` / `evaluate_compiled` / `evaluate_compiled_addressed` let a generic-ABI host build a policy once and evaluate against a handle, which is what the proxy-wasm path has always done internally. This was the benchmark's clearest finding: through `evaluate` zopa answered the RBAC fixture in 5.76 us against OPA-in-wasm's 2.24; against a held policy it answers in 1.32. The AST parse was the entire difference.
 - **Streaming evaluation runtime.** Build on the body-deps analyser to skip body buffering when no body refs exist, or short-circuit as soon as referenced prefixes resolve. Design in `docs/proposals/streaming-evaluation.md`.
 - **Conformance corpus expansion.** Vendor a slice of the OPA upstream test corpus and grow `tools/rego2ast.py` to cover enough of the Rego subset for `pass / total` to become a meaningful coverage number.
@@ -49,7 +49,7 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 
 ## Medium term
 
-- **Cedar in the benchmark.** The only engine from the original cross-engine plan still unmeasured. No first-party binding is reachable from Node without a dependency, so this means either a second harness in Rust or waiting for one.
+- **Cedar measured natively.** Cedar is in the benchmark now, through `@cedar-policy/cedar-wasm` with the policy set preparsed, but the wasm-bindgen serialisation boundary dominates that number rather than the evaluator. A `cedar-policy` embedding in Rust would measure the engine instead, at the cost of a second harness in a second language for one row.
 - **Per-root-context policies.** `proxy_on_configure` currently ignores the root context id, so a VM shared by two filter configurations (an explicit shared `vm_id`) keeps only the last policy. Supporting more than one needs a root-context table plus a stream→root mapping recorded in `proxy_on_context_create`.
 - **proxy-wasm 0.3.x** when the spec stabilizes (design in `docs/proposals/proxy-wasm-0-3.md`). Still an open milestone upstream as of August 2026; `proxy_on_memory_allocate` is the only vNEXT piece adopted so far.
 - **Reference AuthZEN PDP.** A thin HTTP server -- separate repository -- that exposes `/access/v1/evaluation` over a zopa instance, so the mapping in `docs/authzen.md` has an executable counterpart. Deliberately not part of the wasm module.

@@ -32,3 +32,4 @@ CLAUDE.md
 CLAUDE.local.md
 .mcp.json
 bench-smoke.json
+node_modules/
