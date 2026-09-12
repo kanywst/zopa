@@ -113,6 +113,13 @@ fn visit(st: *State, expr: *const ast.Expr) void {
             }
         },
         .call => |c| for (c.args) |arg| visit(st, arg),
+        // `x := input.body.amount` reads the body just as surely as
+        // comparing against it does. Missing this would classify such a
+        // policy as touching nothing, and the shim would then evaluate
+        // it against a truncated prefix -- the fail-open this analyser
+        // exists to prevent, reached through a node that did not exist
+        // when it was written.
+        .assign => |a| visit(st, a.value),
     }
 }
 
@@ -307,6 +314,29 @@ test "analyze: a path opening with an index reaches no body" {
         "\"left\":{\"type\":\"ref\",\"path\":[0,\"body\"]}," ++
         "\"right\":{\"type\":\"value\",\"value\":1}}";
     try testing.expectEqual(Class.no_body_refs, try classify(bare_index));
+}
+
+test "analyze: a binding of the body counts as reading it" {
+    // `x := input.body.amount` reads the body as surely as comparing
+    // against it does. Missing this would classify the policy as
+    // touching nothing, and the shim would evaluate it against a
+    // truncated prefix -- the fail-open this analyser exists to
+    // prevent, arriving through a node that postdates it.
+    const bound_prefix =
+        "{\"type\":\"assign\",\"var\":\"a\"," ++
+        "\"value\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"amount\"]}}";
+    try testing.expectEqual(Class.prefix_only, try classify(bound_prefix));
+
+    const bound_whole =
+        "{\"type\":\"assign\",\"var\":\"b\"," ++
+        "\"value\":{\"type\":\"ref\",\"path\":[\"input\",\"body_raw\"]}}";
+    try testing.expectEqual(Class.full_tree, try classify(bound_whole));
+
+    // A binding that reads nothing from the body still reads nothing.
+    const unrelated =
+        "{\"type\":\"assign\",\"var\":\"c\"," ++
+        "\"value\":{\"type\":\"ref\",\"path\":[\"input\",\"method\"]}}";
+    try testing.expectEqual(Class.no_body_refs, try classify(unrelated));
 }
 
 test "analyzeTarget: only the named rule's body refs count" {

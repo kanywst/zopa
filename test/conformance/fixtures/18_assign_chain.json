@@ -1,0 +1,10 @@
+{
+  "name":  "assign_chain",
+  "note":  "Two bindings, the second reading the first, then a comparison reading both. Pins that the scope carries forward across siblings rather than only into the next expression.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if {\n\tuser := input.user\n\trole := user.role\n\trole == \"admin\"\n\tuser.active == true\n}\n",
+  "cases": [
+    { "input": { "user": { "role": "admin", "active": true } },  "expected": 1 },
+    { "input": { "user": { "role": "admin", "active": false } }, "expected": 0 },
+    { "input": { "user": { "role": "guest", "active": true } },  "expected": 0 }
+  ]
+}

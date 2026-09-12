@@ -48,6 +48,8 @@ CORPUS: list[tuple[str, str, str]] = [
     ("cmp/gt", "greater than", "allow if input.x > 1"),
     ("cmp/gte", "greater or equal", "allow if input.x >= 1"),
     ("cmp/assign", "assignment in a body", "allow if {\n\tx := input.x\n\tx == 1\n}"),
+    ("cmp/assign-chain", "a binding read by a later binding", "allow if {\n\tu := input.u\n\tr := u.r\n\tr == 1\n}"),
+    ("cmp/assign-destructure", "destructuring assignment", "allow if { [a, b] := input.pair }"),
 
     # --- literals ---
     ("lit/string", "string literal", 'allow if input.x == "s"'),

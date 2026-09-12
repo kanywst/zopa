@@ -1129,6 +1129,55 @@ for (const [label, seg] of [['negative', -1], ['fractional', 1.5], ['boolean', t
 }
 
 
+// ---------------------------------------------------------------------------
+// 18. `assign`: a binding visible to the rest of the body. Unlike
+//     `some`/`every`, which own the single expression they bind over,
+//     an assignment scopes over its siblings.
+// ---------------------------------------------------------------------------
+const assignPolicy = {
+  type: "module",
+  rules: [
+    { type: "rule", name: "allow", default: true, value: { type: "value", value: false } },
+    {
+      type: "rule",
+      name: "allow",
+      body: [
+        { type: "assign", var: "role", value: { type: "ref", path: ["input", "user", "role"] } },
+        { type: "compare", op: "eq", left: { type: "ref", path: ["role"] }, right: { type: "value", value: "admin" } },
+      ],
+    },
+  ],
+};
+
+check('assign: bound value is visible later in the body', decide({ user: { role: 'admin' } }, assignPolicy), 1);
+check('assign: wrong value denies', decide({ user: { role: 'guest' } }, assignPolicy), 0);
+// An undefined right-hand side makes the body undefined rather than
+// binding null, or `x := input.missing` would compare equal to another
+// missing field and quietly hold.
+check('assign: undefined right-hand side denies', decide({}, assignPolicy), 0);
+
+check(
+  'assign: a later binding shadows an earlier one',
+  decide({}, { type: "module", rules: [{ type: "rule", name: "allow", body: [
+    { type: "assign", var: "x", value: { type: "value", value: 1 } },
+    { type: "assign", var: "x", value: { type: "value", value: 2 } },
+    { type: "compare", op: "eq", left: { type: "ref", path: ["x"] }, right: { type: "value", value: 2 } },
+  ] }] }),
+  1,
+);
+
+// Rego holds for a body that is only a binding, checked against
+// `opa eval`. Pointless, but not false.
+check('assign: a trailing binding holds', decide({}, { type: "assign", var: "x", value: { type: "value", value: 1 } }), 1);
+
+// Nested where there is no body to cover, it cannot mean anything.
+check(
+  'assign: nested under not -> -1',
+  decide({}, { type: "not", expr: { type: "assign", var: "x", value: { type: "value", value: 1 } } }),
+  -1,
+);
+
+
 if (failed > 0) {
   console.error(`\n${failed} test(s) failed`);
   exit(1);

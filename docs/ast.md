@@ -144,6 +144,20 @@ A missing path is *undefined*, treated as `false` in body position -- deny-by-de
 
 Reaching it takes defining `f()`, never calling it (the call site is refused as an unsupported call), and then targeting `f` directly. Recorded here rather than left to be discovered, and pinned by a test that fails if OPA ever starts distinguishing the two.
 
+### `assign` -- bind a name for the rest of the body
+
+```json
+{ "type": "assign", "var": "role", "value": { "type": "ref", "path": ["input", "user", "role"] } }
+```
+
+`x := <expr>` in Rego. The binding is visible to every expression **after** it in the same body, which is what separates it from `some` / `every`: those own the single expression they bind over, an assignment scopes over its siblings.
+
+A binding whose value is undefined makes the body undefined, so the rule does not hold. Binding null instead would let `x := input.missing` compare equal to another missing field and quietly succeed.
+
+A later binding of the same name shadows an earlier one, and a binding never escapes its own rule body.
+
+Only meaningful as a body statement. A body that ends in one still holds, matching Rego (`allow if { x := 1 }` is true), but nested where there is nothing to scope over -- inside `not`, or as the body of a `some` -- it is `error.AssignOutsideBody`, which surfaces as `-1` and denies. Destructuring targets (`[a, b] := ...`) are not supported; `tools/rego2ast.py` refuses them.
+
 ### `compare` -- binary comparison
 
 ```json
