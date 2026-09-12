@@ -41,12 +41,17 @@ def sbom(tools, components=None):
 
 
 class Annotate(unittest.TestCase):
-    def run_script(self, doc, *, artifact=ARTIFACT_BYTES, sha=ARTIFACT_SHA, licence="Apache License 2.0"):
+    def run_script(self, doc, *, artifact=ARTIFACT_BYTES, sha=ARTIFACT_SHA, licence=None):
         with TemporaryDirectory() as d:
             work = Path(d)
             (work / "sbom.json").write_text(json.dumps(doc))
             (work / "zopa.wasm").write_bytes(artifact)
-            (work / "LICENSE").write_text(licence)
+            # The repository's own LICENSE by default: the check is a
+            # digest comparison against the canonical Apache 2.0 text,
+            # so a stand-in string would fail for the wrong reason.
+            (work / "LICENSE").write_text(
+                (REPO / "LICENSE").read_text() if licence is None else licence
+            )
             proc = subprocess.run(
                 [str(SCRIPT), "sbom.json", "zopa.wasm", sha, "v9.9.9", "LICENSE"],
                 cwd=work, capture_output=True, text=True, check=False,
@@ -95,10 +100,32 @@ class Annotate(unittest.TestCase):
         self.assertIn("expected zero dependency components", proc.stderr)
         self.assertIn("some-action", proc.stderr)
 
-    def test_refuses_when_the_licence_file_disagrees(self):
-        proc, _ = self.run_script(sbom(TOOLS_OBJECT), licence="The MIT License")
+    def test_accepts_the_repository_licence_as_it_stands(self):
+        # Guards the v0.4.1 restoration too: if LICENSE drifts from the
+        # canonical text again, the release stops rather than describing
+        # it as Apache-2.0 in a signed document.
+        proc, _ = self.run_script(sbom(TOOLS_OBJECT))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_refuses_a_different_licence(self):
+        proc, _ = self.run_script(sbom(TOOLS_OBJECT), licence="The MIT License\n")
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("does not look like Apache 2.0", proc.stderr)
+        self.assertIn("not the canonical Apache License 2.0", proc.stderr)
+
+    def test_refuses_an_edited_apache_licence(self):
+        # A substring match on "Apache License" would pass all three of
+        # these: a one-byte edit, a reworded clause, and Apache 1.1.
+        edited = (REPO / "LICENSE").read_text() + "\n"
+        proc, _ = self.run_script(sbom(TOOLS_OBJECT), licence=edited)
+        self.assertEqual(proc.returncode, 1, "a one-byte edit must not pass")
+        self.assertIn("not the canonical Apache License 2.0", proc.stderr)
+
+    def test_refuses_apache_1_1(self):
+        proc, _ = self.run_script(
+            sbom(TOOLS_OBJECT), licence="Apache License, Version 1.1\n",
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("not the canonical Apache License 2.0", proc.stderr)
 
 
 if __name__ == "__main__":
