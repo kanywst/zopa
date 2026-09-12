@@ -313,8 +313,15 @@ def walk_term_as_jsonvalue(term: dict[str, Any]) -> Any:
     raise Unsupported(f"non-literal term {t} inside array literal")
 
 
-def _ref_to_path(segments: list[dict[str, Any]]) -> list[str]:
-    path: list[str] = []
+def _ref_to_path(segments: list[dict[str, Any]]) -> list[str | int]:
+    """Flatten an OPA ref into zopa's path array.
+
+    Strings and vars become key segments; a number becomes an array
+    index, which zopa's `ref` encodes as a JSON number in the same
+    array. The two stay distinct end to end -- an index never matches an
+    object key that happens to spell the same digits.
+    """
+    path: list[str | int] = []
     for seg in segments:
         t = seg["type"]
         if t == "var":
@@ -322,9 +329,18 @@ def _ref_to_path(segments: list[dict[str, Any]]) -> list[str]:
         elif t == "string":
             path.append(seg["value"])
         elif t == "number":
-            # zopa refs are string segments only. Number indices into
-            # arrays would need a separate AST shape; out of scope for v1.
-            raise Unsupported("numeric ref segment (array index) not supported")
+            value = seg["value"]
+            # Rego permits `xs[-1]` and `xs[1.5]` syntactically; both are
+            # undefined at evaluation. zopa rejects them when the AST is
+            # built, so refuse here rather than emitting a path the
+            # module will not accept.
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise Unsupported(f"non-numeric array index: {value!r}")
+            if value < 0 or value != int(value):
+                raise Unsupported(
+                    f"array index must be a whole non-negative number, got {value!r}"
+                )
+            path.append(int(value))
         else:
             raise Unsupported(f"unsupported ref segment type: {t}")
     return path

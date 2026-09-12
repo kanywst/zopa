@@ -1,6 +1,6 @@
 {
-  "supported": 32,
-  "total": 48,
+  "supported": 34,
+  "total": 49,
   "constructs": {
     "rule/constant": true,
     "rule/default-deny": true,
@@ -25,7 +25,8 @@
     "ref/input-field": true,
     "ref/nested": true,
     "ref/bracket": true,
-    "ref/array-index": false,
+    "ref/array-index": true,
+    "ref/array-index-nested": true,
     "ref/data": true,
     "logic/and": true,
     "logic/not": true,

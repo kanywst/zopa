@@ -962,6 +962,46 @@ check(
     -1,
 )
 
+# ---------------------------------------------------------------------------
+# Array indices in a ref path. Bound here too, so a divergence between
+# wasmtime and Node in how a numeric segment resolves is caught -- which
+# is the only reason this suite exists separately from run.mjs.
+# ---------------------------------------------------------------------------
+by_index = {
+    "type": "compare",
+    "op": "eq",
+    "left": {"type": "ref", "path": ["input", "groups", 1, "name"]},
+    "right": {"type": "value", "value": "ops"},
+}
+by_string_key = {
+    "type": "compare",
+    "op": "eq",
+    "left": {"type": "ref", "path": ["input", "groups", "1", "name"]},
+    "right": {"type": "value", "value": "ops"},
+}
+as_array = {"groups": [{"name": "dev"}, {"name": "ops"}]}
+as_object = {"groups": {"1": {"name": "ops"}}}
+
+check("array index: hits the right element", decide(as_array, by_index), 1)
+check(
+    "array index: wrong element denies",
+    decide({"groups": [{"name": "ops"}, {"name": "dev"}]}, by_index),
+    0,
+)
+check("array index: past the end -> deny", decide({"groups": [{"name": "dev"}]}, by_index), 0)
+# An index must not resolve against a key that spells the same digits,
+# or a supplied object could stand in for the array a policy indexes.
+check("array index: does not resolve against an object key", decide(as_object, by_index), 0)
+check("string key: does not index an array", decide(as_array, by_string_key), 0)
+check("string key: still looks up a member", decide(as_object, by_string_key), 1)
+
+for label, seg in (("negative", -1), ("fractional", 1.5), ("boolean", True)):
+    check(
+        f"array index: {label} segment -> -1",
+        decide({"groups": []}, {"type": "ref", "path": ["input", "groups", seg]}),
+        -1,
+    )
+
 if failed:
     print(f"\n{failed} test(s) failed", file=sys.stderr)
     sys.exit(1)

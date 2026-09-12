@@ -1077,6 +1077,58 @@ check(
 );
 
 
+// ---------------------------------------------------------------------------
+// 17. Array indices in a ref path. A numeric segment indexes an array;
+//     a string segment looks up a member. Keeping them distinct is the
+//     point: if an index resolved against a key that spells the same
+//     digits, a supplied object could stand in for the array a policy
+//     meant to index.
+// ---------------------------------------------------------------------------
+const byIndex = {
+  type: "compare", op: "eq",
+  left: { type: "ref", path: ["input", "groups", 1, "name"] },
+  right: { type: "value", value: "ops" },
+};
+const byStringKey = {
+  type: "compare", op: "eq",
+  left: { type: "ref", path: ["input", "groups", "1", "name"] },
+  right: { type: "value", value: "ops" },
+};
+const asArray = { groups: [{ name: "dev" }, { name: "ops" }] };
+const asObject = { groups: { 1: { name: "ops" } } };
+
+check('array index: hits the right element', decide(asArray, byIndex), 1);
+check('array index: wrong element denies', decide({ groups: [{ name: "ops" }, { name: "dev" }] }, byIndex), 0);
+check('array index: past the end is undefined -> deny', decide({ groups: [{ name: "dev" }] }, byIndex), 0);
+check('array index: missing path -> deny', decide({}, byIndex), 0);
+check('array index: does not resolve against an object key', decide(asObject, byIndex), 0);
+check('string key: does not index an array', decide(asArray, byStringKey), 0);
+check('string key: still looks up a member', decide(asObject, byStringKey), 1);
+
+// An index into a bound variable, not just the input root.
+check(
+  'array index: walks a value bound by some',
+  decide(
+    { groups: [{ members: ["x"] }, { members: ["root"] }] },
+    { type: "some", var: "g", source: { type: "ref", path: ["input", "groups"] },
+      body: { type: "compare", op: "eq",
+              left: { type: "ref", path: ["g", "members", 0] },
+              right: { type: "value", value: "root" } } },
+  ),
+  1,
+);
+
+// Malformed indices are refused when the AST is built, so the whole
+// evaluation errors rather than quietly denying forever.
+for (const [label, seg] of [['negative', -1], ['fractional', 1.5], ['boolean', true]]) {
+  check(
+    `array index: ${label} segment -> -1`,
+    decide({ groups: [] }, { type: "ref", path: ["input", "groups", seg] }),
+    -1,
+  );
+}
+
+
 if (failed > 0) {
   console.error(`\n${failed} test(s) failed`);
   exit(1);

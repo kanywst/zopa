@@ -4,6 +4,14 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+### Added
+
+- **Array indices in ref paths.** `input.groups[1].name` now converts and evaluates; a `ref` path segment is a JSON string for a member lookup or a non-negative whole number for an index. This was the most-used Rego idiom zopa could not express -- `zig build test-coverage` goes from 32/48 to 34/49.
+
+  The two kinds of segment stay distinct end to end. Indexing `{"groups": {"1": {...}}}` does **not** resolve, and looking up the key `"1"` does not index an array. Collapsing them -- encoding an index as the string `"0"` -- would let a supplied object stand in for the array a policy meant to index, which is a policy bypass rather than a convenience. Both directions are asserted in the unit tests, both host suites, and a conformance fixture.
+
+  A negative, fractional, or non-numeric index is rejected when the AST is built rather than resolving to undefined on every request: a malformed policy should fail at configure time, not become a silent permanent deny. Release build: ~63 KB, up 434 bytes.
+
 ## [0.4.1] - 2026-09-12
 
 **The module does not change.** `zopa-v0.4.1.wasm` is byte-for-byte `zopa-v0.4.0.wasm` (SHA-256 `d60e29fa1f26aa8037b05e66b1864435a6f1935c2dbfc8de510d5032f23e0082`); nothing under `src/` was touched. Everything here is the toolchain, the benchmark, and what a release ships alongside the wasm.
