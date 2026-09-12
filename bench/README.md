@@ -14,7 +14,8 @@ This is why the comparison did not ship in v0.2.0 alongside the zopa-only harnes
 bench/
   run.mjs              orchestrator: agreement gate, then metrics
   engines/
-    zopa.mjs           generic `evaluate(input, ast)` export
+    zopa.mjs           generic `evaluate(input, ast)`: policy handed over per call
+    zopa-compiled.mjs  `policy_compile` once, then `evaluate_compiled(handle, input)`
     opa-wasm.mjs       `opa build -t wasm` + the opa_eval fast path
     opa-http.mjs       `opa run --server` over loopback HTTP
   fixtures/
@@ -61,28 +62,30 @@ Apple M-series laptop, Node 26, OPA 1.20.2, `--release=small`. Reproduce with `z
 
 Per-decision cost, microseconds (`amort`):
 
-| fixture | zopa | OPA (wasm) | OPA (HTTP sidecar) |
-| --- | --- | --- | --- |
-| `01_static` | **0.32** | 0.82 | 133 |
-| `02_header_eq` | 0.98 | **0.95** | 140 |
-| `03_rbac` | 5.80 | **2.24** | 145 |
+| fixture | zopa (evaluate) | zopa (compiled) | OPA (wasm) | OPA (HTTP sidecar) |
+| --- | --- | --- | --- | --- |
+| `01_static` | 0.36 | **0.08** | 0.82 | 138 |
+| `02_header_eq` | 0.97 | **0.19** | 0.96 | 132 |
+| `03_rbac` | 5.76 | **1.32** | 2.24 | 149 |
+| `04_deep_nest` | 5.87 | **0.35** | — | — |
 
 Footprint and start-up:
 
 | | zopa | OPA (wasm) | OPA (HTTP sidecar) |
 | --- | --- | --- | --- |
-| deployed artifact | **61 KiB**, all policies | 131 KiB **per policy** | — |
-| memory after warm-up | 1.3–1.5 MiB | **128 KiB** | 23 MiB |
-| cold start | **0.4 ms** | 0.5 ms | 30–63 ms |
+| deployed artifact | **63 KiB**, all policies | 131 KiB **per policy** | — |
+| memory after warm-up | 1.3–1.6 MiB | **128 KiB** | 23 MiB |
+| cold start | **0.4 ms** | 0.5 ms | 30–60 ms |
 
-Three things to take from that, including the two that do not favour zopa:
+Four things to take from that, including the one that does not favour zopa:
 
-1. **Both in-process engines beat the sidecar by roughly 150x.** This is the claim zopa was built on and it holds with a wide margin. It is also the least surprising row in the table: it is measuring a loopback TCP round trip against a function call.
-2. **OPA's WASM build is faster than zopa on the realistic policy** — 2.24 µs against 5.80 µs on `03_rbac`, a 2.6x loss. The cause is structural and known: the generic `evaluate` export receives the AST bytes on every call and cannot know they are the ones it parsed last time, so a policy parse is inside every measurement. On `03_rbac` that parse is most of the number. The proxy-wasm path does not work this way — `proxy_on_configure` builds the policy once onto a long-lived arena — but there is no exported entry point that takes a pre-built policy handle, so the path that would win here is the one this harness cannot reach. Read the zopa column as an upper bound on the in-Envoy cost, and read this row as the strongest argument yet for exporting that handle.
-3. **zopa holds more WASM memory than OPA's module does** — about 1.4 MiB against 128 KiB. That is the arena working as designed: it is reset with `.retain_capacity` after every request so `memory.grow` stops firing once warm, which trades a steady-state floor for never allocating again. OPA rewinds its heap pointer instead. Against the sidecar's 23 MiB both are rounding errors, but "smaller binary" does not imply "smaller runtime footprint" and the table should not be read as if it did.
+1. **Handing the policy over on every call is most of the cost.** The gap between the two zopa rows is exactly what the AST parse and build cost, because nothing else differs between them: 4.4 µs of the 5.76 on `03_rbac`, and 5.5 µs of the 5.87 on `04_deep_nest`, where the AST is deep and the rule walk is trivial. If you are driving the same policy across requests and using `evaluate`, that is what you are paying for the convenience.
+2. **With the policy held, zopa is faster than OPA's wasm build on every fixture** — 1.32 µs against 2.24 on the realistic RBAC policy, where the one-shot path lost at 5.76. The earlier revision of this file predicted exactly this and could not demonstrate it, because no export took a pre-built policy. `policy_compile` / `evaluate_compiled` is that export.
+3. **Both in-process engines beat the sidecar by two orders of magnitude.** This is the claim zopa was built on and it holds with room to spare. It is also the least surprising row: it measures a loopback TCP round trip against a function call.
+4. **zopa holds more WASM memory than OPA's module does** — about 1.4–1.6 MiB against 128 KiB. That is the arena working as designed: it is reset with `.retain_capacity` after every request so `memory.grow` stops firing once warm, trading a steady-state floor for never allocating again. OPA rewinds its heap pointer instead. Against the sidecar's 23 MiB both are rounding errors, but "smaller binary" does not imply "smaller runtime footprint" and the table should not be read as if it did.
 
 ## Not measured
 
 - **Cedar.** The proposal lists it as a native baseline with no proxy-wasm path. There is no first-party Cedar binding reachable from Node without adding a dependency, and a Rust harness for one engine would mean maintaining two harnesses. Deferred deliberately, not forgotten.
-- **The in-Envoy path.** These numbers are single-process and CPU-bound; the proxy-wasm path adds host calls and header serialisation. See `examples/envoy/`.
+- **The in-Envoy path.** These numbers are single-process and CPU-bound; the proxy-wasm path adds host calls and header serialisation. The `zopa (compiled)` row is the closest proxy of the two, since it does the same per-request work the shim does — input parse plus rule walk against a policy built at configure time. See `examples/envoy/`.
 - **Concurrency.** `ops/s` is one sequential caller. A saturation number across many in-flight requests would say more about the sidecar than about the engines, and it is the sidecar row that is already unambiguous.

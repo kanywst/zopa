@@ -2,17 +2,18 @@
 
 ## Modules
 
-| File                 | Role                                                                                                                                     |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main.zig`       | Generic ABI exports (`malloc`, `free`, `evaluate`). Pulls `proxy_wasm.zig` into the build via a `comptime` reference.                    |
-| `src/memory.zig`     | Long-lived host allocator + per-request arena. Length-prefixed `hostMalloc` / `hostFree` for the proxy-wasm buffer ownership convention. |
-| `src/json.zig`       | Recursive-descent JSON parser. Returns a `Value` tree shared with the AST module.                                                        |
-| `src/ast.zig`        | `Module` / `Rule` / `Expr` types and the JSON-to-AST builders.                                                                           |
-| `src/eval.zig`       | Evaluator. Linked-list scope frames for `some` / `every`. Explicit recursion cap.                                                        |
-| `src/builtins.zig`   | Builtin function table for the `call` node.                                                                                              |
-| `src/body_deps.zig`  | Configure-time analysis of how a policy references the request body. Decides whether a truncated body is decision-relevant.              |
-| `src/wire.zig`       | Header-map decoding and per-phase input synthesis. Deliberately free of ABI imports so unit tests can reach it on the host.              |
-| `src/proxy_wasm.zig` | proxy-wasm 0.2.1 ABI shim. Lifecycle exports, host imports, per-phase evaluation.                                                        |
+| File                 | Role                                                                                                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main.zig`       | Generic ABI exports (`malloc`, `free`, `evaluate`, `policy_compile`, `evaluate_compiled`). Holds the one policy registry. Pulls `proxy_wasm.zig` into the build via a `comptime` reference. |
+| `src/policy.zig`     | Registry of compiled policies addressed by opaque handle, one private arena each. Backs the compiled-policy exports.                                                                        |
+| `src/memory.zig`     | Long-lived host allocator + per-request arena. Length-prefixed `hostMalloc` / `hostFree` for the proxy-wasm buffer ownership convention.                                                    |
+| `src/json.zig`       | Recursive-descent JSON parser. Returns a `Value` tree shared with the AST module.                                                                                                           |
+| `src/ast.zig`        | `Module` / `Rule` / `Expr` types and the JSON-to-AST builders.                                                                                                                              |
+| `src/eval.zig`       | Evaluator. Linked-list scope frames for `some` / `every`. Explicit recursion cap.                                                                                                           |
+| `src/builtins.zig`   | Builtin function table for the `call` node.                                                                                                                                                 |
+| `src/body_deps.zig`  | Configure-time analysis of how a policy references the request body. Decides whether a truncated body is decision-relevant.                                                                 |
+| `src/wire.zig`       | Header-map decoding and per-phase input synthesis. Deliberately free of ABI imports so unit tests can reach it on the host.                                                                 |
+| `src/proxy_wasm.zig` | proxy-wasm 0.2.1 ABI shim. Lifecycle exports, host imports, per-phase evaluation.                                                                                                           |
 
 ## Memory model
 
