@@ -183,6 +183,24 @@ check "POST body over the 64 KiB cap -> 403 fail closed" 403 \
     -X POST -H "Content-Type: application/json" \
     --data-binary "@$WORK/oversized.json" "$base/"
 
+# Array indexing through the real filter. Every other suite covers it
+# against `evaluate`; only this one drives it through proxy_on_configure
+# and the body callback, where the policy lives on its own arena and the
+# input is synthesised rather than handed over.
+check "POST items[0].sku=CONTRABAND -> 403 index deny" 403 \
+    -X POST -H "Content-Type: application/json" \
+    --data '{"items":[{"sku":"CONTRABAND"},{"sku":"ok"}]}' "$base/"
+
+check "POST items[1].sku=CONTRABAND -> 200 (wrong index)" 200 \
+    -X POST -H "Content-Type: application/json" \
+    --data '{"items":[{"sku":"ok"},{"sku":"CONTRABAND"}]}' "$base/"
+
+# An object keyed "0" must not satisfy an index, or a caller could swap
+# the array a policy indexes for a lookalike and slip past the rule.
+check "POST items as an object keyed 0 -> 200 (index does not match a key)" 200 \
+    -X POST -H "Content-Type: application/json" \
+    --data '{"items":{"0":{"sku":"CONTRABAND"}}}' "$base/"
+
 check "POST body_raw marker -> 403 raw deny" 403 \
     -X POST -H "Content-Type: text/plain" \
     --data 'this payload is BLOCKED' "$base/"

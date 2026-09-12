@@ -8,7 +8,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 - **Array indices in ref paths.** `input.groups[1].name` now converts and evaluates; a `ref` path segment is a JSON string for a member lookup or a non-negative whole number for an index. This was the most-used Rego idiom zopa could not express -- `zig build test-coverage` goes from 32/48 to 34/49.
 
-  The two kinds of segment stay distinct end to end. Indexing `{"groups": {"1": {...}}}` does **not** resolve, and looking up the key `"1"` does not index an array. Collapsing them -- encoding an index as the string `"0"` -- would let a supplied object stand in for the array a policy meant to index, which is a policy bypass rather than a convenience. Both directions are asserted in the unit tests, both host suites, and a conformance fixture.
+  The two kinds of segment stay distinct end to end. Indexing `{"groups": {"1": {...}}}` does **not** resolve, and looking up the key `"1"` does not index an array. Collapsing them -- encoding an index as the string `"0"` -- would let a supplied object stand in for the array a policy meant to index, which is a policy bypass rather than a convenience. Both directions are asserted in the unit tests, both host suites, a conformance fixture, and end to end through a real Envoy filter.
 
   A negative, fractional, or non-numeric index is rejected when the AST is built rather than resolving to undefined on every request: a malformed policy should fail at configure time, not become a silent permanent deny. Release build: ~63 KB, up 6 bytes -- the evaluator reuses the walker it already had for bound values rather than materialising the path.
 
