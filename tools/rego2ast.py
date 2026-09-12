@@ -59,14 +59,21 @@ def walk_rule(rule: dict[str, Any]) -> dict[str, Any]:
     head = rule["head"]
     name = head["name"]
 
-    # A partial rule -- `deny contains msg if ...`, or `p[k] = v` --
-    # builds a set or object across every definition that holds. zopa
-    # rules are complete: one name, one value. Converting the head to a
-    # plain boolean rule loses the collected values entirely, and turns
-    # definitions OPA unions into definitions zopa treats as conflicting.
-    if head.get("key") is not None and head.get("value") is None:
+    # A partial rule builds a collection across every definition that
+    # holds: `deny contains msg if ...` a set, `p[k] = v if ...` an
+    # object. zopa rules are complete -- one name, one value -- so
+    # either shape loses what it collected.
+    #
+    # The test is the presence of a key, not the absence of a value. A
+    # partial *object* head carries both, so checking `value is None`
+    # catches only the set spelling and lets `p[k] = v` through the
+    # regular path below, where the key is never read and is silently
+    # discarded -- the same "converts fine, means something else" bug
+    # this guard exists to stop.
+    if head.get("key") is not None:
+        kind = "set" if head.get("value") is None else "object"
         raise Unsupported(
-            f"partial set rule `{name}` not supported: "
+            f"partial {kind} rule `{name}` not supported: "
             "zopa rules are complete, so the collected values would be lost"
         )
 

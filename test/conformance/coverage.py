@@ -95,11 +95,26 @@ CORPUS: list[tuple[str, str, str]] = [
      "allow if f(input.x)\n\nf(x) if x == 1"),
     ("misc/with", "the `with` modifier", "allow if input.x == 1 with input.y as 2"),
     ("misc/partial-set", "partial set rule", 'deny contains "x" if input.x == 1'),
+    ("misc/partial-object", "partial object rule", "p[input.x] = input.y if input.x == 1"),
 ]
 
 
+# rego2ast exits 3 for a construct it knows it cannot express. Anything
+# else non-zero is the converter falling over -- a traceback where the
+# caller expects a decision -- and the two must not look the same here.
+# Both would otherwise register as "does not convert", so a clean bail
+# decaying into a crash (which is what the standalone `some ... in`
+# handling was before this corpus existed) would leave the table
+# unchanged and go unnoticed.
+UNSUPPORTED_EXIT = 3
+
+
 def convert(rego: str) -> tuple[bool, str]:
-    """Run `opa parse | rego2ast` over one policy. Returns (ok, detail)."""
+    """Run `opa parse | rego2ast` over one policy.
+
+    Returns (ok, detail). `detail` is prefixed with `CRASH:` when the
+    converter failed in a way it does not claim to handle.
+    """
     source = f"package authz\n\n{rego}\n"
     try:
         parsed = subprocess.run(
@@ -121,7 +136,10 @@ def convert(rego: str) -> tuple[bool, str]:
     if converted.returncode == 0:
         return True, ""
     detail = (converted.stderr or converted.stdout or "").strip().splitlines()
-    return False, detail[-1] if detail else "unknown failure"
+    last = detail[-1] if detail else "unknown failure"
+    if converted.returncode != UNSUPPORTED_EXIT:
+        return False, f"CRASH: exit {converted.returncode}: {last}"
+    return False, last
 
 
 def main() -> int:
@@ -138,6 +156,7 @@ def main() -> int:
         details[key] = (label, detail)
 
     supported = sum(1 for v in results.values() if v)
+    crashes = sorted(k for k, (_, d) in details.items() if d.startswith("CRASH:"))
 
     if args.json:
         print(json.dumps({"supported": supported, "total": len(results), "constructs": results}, indent=2))
@@ -151,6 +170,18 @@ def main() -> int:
             print(f"{key.ljust(width)}  {mark}    {note}")
         print(f"\n{supported}/{len(results)} constructs convert")
         print("Converting is not the same as evaluating correctly; see test/conformance/run.py for that.")
+
+    # A crash is never an acceptable resting state, whatever the
+    # baseline says: rego2ast promises either an AST or a described
+    # refusal, and a traceback is neither.
+    if crashes:
+        for key in crashes:
+            print(f"\nCRASH  {key}: {details[key][1]}", file=sys.stderr)
+        print(
+            "\nrego2ast must answer with an AST or a described refusal, never a traceback.",
+            file=sys.stderr,
+        )
+        return 1
 
     if args.check:
         baseline = json.loads(Path(args.check).read_text())["constructs"]
