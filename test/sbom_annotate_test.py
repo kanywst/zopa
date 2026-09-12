@@ -100,6 +100,23 @@ class Annotate(unittest.TestCase):
         self.assertIn("expected zero dependency components", proc.stderr)
         self.assertIn("some-action", proc.stderr)
 
+    def test_refuses_a_document_with_no_components_key(self):
+        # `null | length` is 0 in jq, so a missing key would otherwise
+        # read as "zero, verified clean" -- the failure mode of a scan
+        # that broke rather than one that found nothing.
+        doc = sbom(TOOLS_OBJECT)
+        del doc["components"]
+        proc, _ = self.run_script(doc)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("no components array", proc.stderr)
+
+    def test_refuses_a_null_components_key(self):
+        doc = sbom(TOOLS_OBJECT)
+        doc["components"] = None
+        proc, _ = self.run_script(doc)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("no components array", proc.stderr)
+
     def test_accepts_the_repository_licence_as_it_stands(self):
         # Guards the v0.4.1 restoration too: if LICENSE drifts from the
         # canonical text again, the release stops rather than describing

@@ -76,6 +76,16 @@ jq -e '.metadata.tools.components[] | select(.name == "zig")' "$sbom" >/dev/null
 # build.zig.zon declares no dependencies and the module is stdlib-only,
 # so zero is the answer. Non-zero means the scan is wrong, not that a
 # dependency appeared.
+# `null | length` is 0 in jq, so a document with no `components` key --
+# or an explicit null -- would read as "zero, verified clean" and pass
+# the check below. The drift this guards against does not only produce
+# *more* components; a broken or misdirected scan can as easily produce
+# a document missing the key entirely.
+if ! jq -e 'has("components") and (.components | type == "array")' "$sbom" >/dev/null; then
+    echo "sbom has no components array; the scan did not produce a usable document" >&2
+    exit 1
+fi
+
 components=$(jq '.components | length' "$sbom")
 if [ "$components" != "0" ]; then
     echo "expected zero dependency components (build.zig.zon declares none); got $components." >&2
