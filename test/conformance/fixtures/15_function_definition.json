@@ -1,0 +1,13 @@
+{
+  "name": "function_definition",
+  "note": "The call site was already refused; the definition alone converted into a rule whose parameter resolved against the input document instead of a binding.",
+  "rego": "package authz\n\nallow if input.x == 1\n\nf(x) if x == 1\n",
+  "cases": [
+    {
+      "input": {
+        "y": 2
+      },
+      "expected": 1
+    }
+  ]
+}

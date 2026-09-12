@@ -1,6 +1,6 @@
 {
   "supported": 32,
-  "total": 46,
+  "total": 48,
   "constructs": {
     "rule/constant": true,
     "rule/default-deny": true,
@@ -45,6 +45,8 @@
     "comp/array": false,
     "comp/set": false,
     "func/user-defined": false,
+    "func/definition-only": false,
+    "rule/else": false,
     "misc/with": false,
     "misc/partial-set": false,
     "misc/partial-object": false
