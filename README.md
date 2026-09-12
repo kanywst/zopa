@@ -145,7 +145,7 @@ Reaching for the wrong tool costs more than the 60 KB saves:
 | `evaluate_compiled`           | `(handle, input) -> i32`                | Decide `allow` against a held policy.                             |
 | `evaluate_compiled_addressed` | `(handle, input, package, rule) -> i32` | Decide `package.rule` against a held policy.                      |
 
-The five decision exports return `1` (allow), `0` (deny), or `-1` (error). Treat `-1` as deny; it means the input or policy could not be evaluated, which is never a grant. A handle that was never issued, or has already been released, is an error and therefore denies.
+The five decision exports return `1` (allow), `0` (deny), or `-1` (error). Treat `-1` as deny; it means the input or policy could not be evaluated, which is never a grant. A handle that was never issued, or has already been released, is an error and therefore denies -- including after its slot has been reused by a later `policy_compile`, since a handle carries the generation of the slot it was issued for as well as its index.
 
 **Compile once if you serve traffic.** `evaluate` is handed the AST on every call and cannot know it is the same one as last time, so it re-parses and rebuilds the policy each request -- on the benchmark's RBAC fixture that is 4.4 µs of 5.76. `policy_compile` builds it onto its own arena and hands back a handle; `evaluate_compiled` then does the input parse and the rule walk and nothing else. The host owns the handle and must `policy_release` it; nothing in the module can know when you are done, so a handle you drop leaks the policy for the life of the module, exactly like a `malloc` you never free. This is the arrangement the proxy-wasm path has always used internally.
 

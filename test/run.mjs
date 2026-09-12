@@ -1040,6 +1040,28 @@ check('compiled: negative handle -> -1', decideCompiled(-1, {}), -1);
 check('compiled: handle past the table -> -1', decideCompiled(9999, {}), -1);
 check('compiled: releasing an unissued handle -> 0', policy_release(9999), 0);
 
+// The case above only proves a released handle fails while its slot is
+// still empty. Slots are reused, so the question that matters is what a
+// stale handle does after something else has been compiled into its
+// slot: it must still deny, not resolve to the new occupant. The two
+// policies here disagree on every input, so a resolved stale handle
+// would come back 1 rather than -1.
+const denyAll = compilePolicy({
+  type: "module",
+  rules: [{ type: "rule", name: "allow", default: true, value: { type: "value", value: false } }],
+});
+check('compiled: deny-all policy denies', decideCompiled(denyAll, {}), 0);
+check('policy_release frees the deny-all policy', policy_release(denyAll), 1);
+
+const allowAll = compilePolicy({
+  type: "module",
+  rules: [{ type: "rule", name: "allow", value: { type: "value", value: true } }],
+});
+check('compiled: allow-all policy allows', decideCompiled(allowAll, {}), 1);
+check('compiled: the reused slot issued a different handle', denyAll !== allowAll, true);
+check('compiled: stale handle over a reused slot -> -1, not the new policy', decideCompiled(denyAll, {}), -1);
+check('compiled: releasing the stale handle -> 0', policy_release(denyAll), 0);
+
 // A policy that will not build must not yield a handle.
 check('policy_compile rejects malformed JSON', compilePolicy('{ not json'), -1);
 check(

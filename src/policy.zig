@@ -17,12 +17,23 @@
 //! policy, so one that forgets leaks it for the life of the module.
 //! That is the same contract as `malloc`.
 //!
-//! Handles are table indices, never pointers. A host that passes a
-//! stale or forged handle gets `error.InvalidHandle`, which the export
-//! layer turns into `-1` and every caller denies on. Handing out raw
-//! pointers would turn the same mistake into a read of arbitrary linear
-//! memory, which in an authorization engine is a bypass primitive
-//! rather than a crash.
+//! Handles are not pointers. A host that passes a stale or forged
+//! handle gets `error.InvalidHandle`, which the export layer turns into
+//! `-1` and every caller denies on. Handing out raw pointers would turn
+//! the same mistake into a read of arbitrary linear memory, which in an
+//! authorization engine is a bypass primitive rather than a crash.
+//!
+//! A bare table index is not enough for that, though. Slots are reused,
+//! so `release(h)` followed by another `compile` would reissue `h` for a
+//! different policy, and a caller still holding the old `h` -- a cached
+//! variable, a request in flight while the host reconfigures -- would
+//! get an authoritative-looking decision from the wrong policy instead
+//! of a denial. That is the same class of bug as the dangling pointer,
+//! just bounded to "wrong policy" rather than "wrong memory". So a
+//! handle carries a generation alongside the index, `lookup` checks it,
+//! and a slot whose generation is exhausted is retired rather than
+//! reused. Stale handles therefore always deny, which is what the docs
+//! promise.
 //!
 //! The allocator is a field rather than `memory.host_allocator` so this
 //! module can be tested natively: `std.heap.wasm_allocator` does not
@@ -36,25 +47,52 @@ const ast = @import("ast.zig");
 const eval = @import("eval.zig");
 const json = @import("json.zig");
 
-/// Opaque policy identifier. Zero is never issued, so a zeroed
-/// variable on the host side cannot name a live policy.
+/// Opaque policy identifier: a slot index in the low bits and the
+/// generation that slot was on when the handle was issued in the high
+/// bits. Zero is never issued, so a zeroed variable on the host side
+/// cannot name a live policy.
+///
+/// The layout stays inside 31 bits because the export signature is
+/// `i32` and negative values are reserved for errors.
 pub const Handle = u32;
 
-pub const Error = error{InvalidHandle};
+const index_bits: u5 = 16;
+const index_mask: u32 = (1 << index_bits) - 1;
+
+/// Slots and generations are both capped by the split above. A host
+/// that exhausts either is doing something no deployment does; both
+/// limits fail the allocation rather than wrapping, because wrapping is
+/// exactly the reuse this scheme exists to prevent.
+const max_slots: usize = index_mask; // index 0..=65534, +1 when encoded
+const max_generation: u32 = (1 << (31 - @as(u6, index_bits))) - 1;
+
+pub const Error = error{ InvalidHandle, TooManyPolicies };
 
 const Entry = struct {
     arena: std.heap.ArenaAllocator,
     bundle: ast.Modules,
 };
 
+const Slot = struct {
+    entry: ?*Entry,
+    /// Bumped every time this slot is filled. A handle issued at an
+    /// earlier generation no longer resolves.
+    generation: u32,
+};
+
+fn encode(index: usize, generation: u32) Handle {
+    return (generation << index_bits) | @as(u32, @intCast(index + 1));
+}
+
 pub const Registry = struct {
     gpa: std.mem.Allocator,
 
-    /// Slot table. A released slot is nulled and reused, so a host that
-    /// churns policies does not grow this without bound. Entries are
+    /// Slot table. A released slot is emptied and reused at a bumped
+    /// generation, so a host that churns policies does not grow this
+    /// without bound while old handles still stop resolving. Entries are
     /// heap-allocated so a table resize never moves an arena that live
     /// AST nodes were allocated from.
-    slots: std.ArrayList(?*Entry) = .empty,
+    slots: std.ArrayList(Slot) = .empty,
 
     /// Parse and build `policy_bytes` onto a private arena and return
     /// the handle addressing it. The caller keeps ownership of
@@ -76,20 +114,34 @@ pub const Registry = struct {
 
     /// Place `entry` in the table and return its handle. Split out so
     /// the failure path in `compile` stays a plain `errdefer` chain.
+    ///
+    /// A free slot is only reused if its generation can still advance.
+    /// One that has run out is left empty forever: retiring a slot costs
+    /// a table entry, while wrapping its generation would silently start
+    /// handing out handles that collide with ones a host may still hold.
     fn install(self: *Registry, entry: *Entry) !Handle {
-        for (self.slots.items, 0..) |slot, i| {
-            if (slot == null) {
-                self.slots.items[i] = entry;
-                return @intCast(i + 1);
+        for (self.slots.items, 0..) |*slot, i| {
+            if (slot.entry == null and slot.generation < max_generation) {
+                slot.entry = entry;
+                slot.generation += 1;
+                return encode(i, slot.generation);
             }
         }
-        try self.slots.append(self.gpa, entry);
-        return @intCast(self.slots.items.len);
+        if (self.slots.items.len >= max_slots) return Error.TooManyPolicies;
+        try self.slots.append(self.gpa, .{ .entry = entry, .generation = 1 });
+        return encode(self.slots.items.len - 1, 1);
     }
 
+    /// Resolve a handle, rejecting anything that does not name the exact
+    /// policy the handle was issued for. The generation check is what
+    /// makes a handle whose slot has since been reused fail rather than
+    /// silently resolve to whatever policy now lives there.
     fn lookup(self: *Registry, handle: Handle) Error!*Entry {
-        if (handle == 0 or handle > self.slots.items.len) return Error.InvalidHandle;
-        return self.slots.items[handle - 1] orelse Error.InvalidHandle;
+        const index = @as(usize, handle & index_mask);
+        if (index == 0 or index > self.slots.items.len) return Error.InvalidHandle;
+        const slot = self.slots.items[index - 1];
+        if (slot.generation != handle >> index_bits) return Error.InvalidHandle;
+        return slot.entry orelse Error.InvalidHandle;
     }
 
     /// Evaluate `target_package.target_rule` against a held policy.
@@ -115,7 +167,10 @@ pub const Registry = struct {
         const entry = self.lookup(handle) catch return false;
         entry.arena.deinit();
         self.gpa.destroy(entry);
-        self.slots.items[handle - 1] = null;
+        // The generation is left where it is and bumped on the next
+        // install, so this handle stops resolving immediately and the
+        // next occupant gets a different one.
+        self.slots.items[(handle & index_mask) - 1].entry = null;
         return true;
     }
 
@@ -124,7 +179,7 @@ pub const Registry = struct {
     pub fn liveCount(self: *const Registry) usize {
         var n: usize = 0;
         for (self.slots.items) |slot| {
-            if (slot != null) n += 1;
+            if (slot.entry != null) n += 1;
         }
         return n;
     }
@@ -134,7 +189,7 @@ pub const Registry = struct {
     /// every test does.
     pub fn deinit(self: *Registry) void {
         for (self.slots.items) |slot| {
-            if (slot) |entry| {
+            if (slot.entry) |entry| {
                 entry.arena.deinit();
                 self.gpa.destroy(entry);
             }
@@ -239,7 +294,7 @@ test "released, doubled, zero and out-of-range handles are rejected, not followe
     try testing.expect(!registry.release(9999));
 }
 
-test "a released slot is reused rather than growing the table" {
+test "a released slot is reused, but never under the old handle" {
     var registry: Registry = .{ .gpa = testing.allocator };
     defer registry.deinit();
 
@@ -247,8 +302,63 @@ test "a released slot is reused rather than growing the table" {
     try testing.expect(registry.release(first));
     const second = try registry.compile(rbac_policy);
 
-    try testing.expectEqual(first, second);
+    // Same storage, so the table does not grow...
     try testing.expectEqual(@as(usize, 1), registry.slots.items.len);
+    try testing.expectEqual(first & index_mask, second & index_mask);
+    // ...but a different handle, so the old one cannot name the new
+    // policy.
+    try testing.expect(first != second);
+}
+
+test "a stale handle whose slot was reused denies, it does not resolve" {
+    var registry: Registry = .{ .gpa = testing.allocator };
+    defer registry.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // `deny_all` and `allow_all` disagree on every input, so if the
+    // stale handle resolved to the slot's new occupant this would come
+    // back 1 rather than -1 -- an authoritative decision from the wrong
+    // policy, which is the bug this generation counter exists to stop.
+    const deny_all = try registry.compile(
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","default":true,"value":{"type":"value","value":false}}]}
+    );
+    try testing.expect(!try registry.evaluateAddressed(&arena, deny_all, "{}", "", "allow"));
+    try testing.expect(registry.release(deny_all));
+
+    const allow_all = try registry.compile(
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","value":{"type":"value","value":true}}]}
+    );
+    // The new policy took the freed slot.
+    try testing.expectEqual(deny_all & index_mask, allow_all & index_mask);
+    try testing.expect(try registry.evaluateAddressed(&arena, allow_all, "{}", "", "allow"));
+
+    // The old handle still refuses.
+    try testing.expectError(Error.InvalidHandle, registry.evaluateAddressed(&arena, deny_all, "{}", "", "allow"));
+    try testing.expect(!registry.release(deny_all));
+}
+
+test "a slot whose generation is exhausted is retired, not wrapped" {
+    var registry: Registry = .{ .gpa = testing.allocator };
+    defer registry.deinit();
+
+    const first = try registry.compile(rbac_policy);
+    try testing.expect(registry.release(first));
+
+    // Fast-forward the slot to its last usable generation rather than
+    // compiling 32767 times.
+    registry.slots.items[0].generation = max_generation - 1;
+    const last = try registry.compile(rbac_policy);
+    try testing.expectEqual(max_generation, last >> index_bits);
+    try testing.expect(registry.release(last));
+
+    // The slot can no longer advance, so it is left alone and the next
+    // policy goes somewhere new. Wrapping instead would reissue handles
+    // that an unlucky host might still be holding.
+    const next = try registry.compile(rbac_policy);
+    try testing.expect((next & index_mask) != (last & index_mask));
+    try testing.expectEqual(@as(usize, 2), registry.slots.items.len);
 }
 
 test "a policy that will not build leaves no handle and no leak" {

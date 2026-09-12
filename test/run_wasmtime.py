@@ -900,6 +900,43 @@ check("compiled: negative handle -> -1", decide_compiled(-1, {}), -1)
 check("compiled: handle past the table -> -1", decide_compiled(9999, {}), -1)
 check("compiled: releasing an unissued handle -> 0", policy_release(store, 9999), 0)
 
+# The case above only proves a released handle fails while its slot is
+# still empty. Slots are reused, so the question that matters is what a
+# stale handle does once something else has been compiled into its slot:
+# it must still deny rather than resolve to the new occupant. These two
+# policies disagree on every input, so a resolved stale handle would
+# come back 1 instead of -1.
+deny_all = compile_policy(
+    {
+        "type": "module",
+        "rules": [
+            {
+                "type": "rule",
+                "name": "allow",
+                "default": True,
+                "value": {"type": "value", "value": False},
+            }
+        ],
+    }
+)
+check("compiled: deny-all policy denies", decide_compiled(deny_all, {}), 0)
+check("policy_release frees the deny-all policy", policy_release(store, deny_all), 1)
+
+allow_all = compile_policy(
+    {
+        "type": "module",
+        "rules": [{"type": "rule", "name": "allow", "value": {"type": "value", "value": True}}],
+    }
+)
+check("compiled: allow-all policy allows", decide_compiled(allow_all, {}), 1)
+check("compiled: the reused slot issued a different handle", deny_all != allow_all, True)
+check(
+    "compiled: stale handle over a reused slot -> -1, not the new policy",
+    decide_compiled(deny_all, {}),
+    -1,
+)
+check("compiled: releasing the stale handle -> 0", policy_release(store, deny_all), 0)
+
 check("policy_compile rejects malformed JSON", compile_policy("{ not json"), -1)
 check(
     "policy_compile rejects two defaults for one rule",
