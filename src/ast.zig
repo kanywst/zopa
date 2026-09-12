@@ -42,6 +42,21 @@ pub const Expr = union(enum) {
     every: Iter,
     call: Call,
 
+    /// Largest accepted array index, fixed rather than
+    /// `maxInt(usize)`.
+    ///
+    /// `usize` is 32 bits on the shipped `wasm32-freestanding` build and
+    /// 64 on the host the unit tests run on, so a target-dependent
+    /// bound would put the real boundary somewhere no native test can
+    /// reach: `4294967296` would be accepted under `zig build test-unit`
+    /// and rejected by the module people deploy. Pinning it makes both
+    /// targets agree and makes the boundary testable.
+    ///
+    /// It is far past any array that fits in a request anyway -- the
+    /// point is to reject nonsense before `@intFromFloat`, not to
+    /// express a real capacity.
+    pub const max_path_index: usize = std.math.maxInt(u32);
+
     /// One step of a `ref` path. A JSON string in the path array is a
     /// member lookup; a non-negative integer is an array index, which
     /// is how `input.groups[0].name` is spelled. Keeping them in one
@@ -292,8 +307,7 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
                 // undefined at every evaluation.
                 .number => |n| blk: {
                     if (n < 0 or n != @floor(n)) return error.InvalidPath;
-                    const max = std.math.maxInt(usize);
-                    if (n > @as(f64, @floatFromInt(max))) return error.InvalidPath;
+                    if (n > Expr.max_path_index) return error.InvalidPath;
                     break :blk .{ .index = @intFromFloat(n) };
                 },
                 else => return error.InvalidPath,
@@ -423,9 +437,19 @@ test "buildExpr: a path index that is not a whole non-negative number is rejecte
         "{\"type\":\"ref\",\"path\":[\"input\",1.5]}",
         "{\"type\":\"ref\",\"path\":[\"input\",true]}",
         "{\"type\":\"ref\",\"path\":[\"input\",null]}",
+        // Past the fixed ceiling. With a `maxInt(usize)` bound this
+        // case would pass here and fail only on wasm32, where `usize`
+        // is 32 bits -- the boundary that actually ships.
+        "{\"type\":\"ref\",\"path\":[\"input\",4294967296]}",
+        "{\"type\":\"ref\",\"path\":[\"input\",1e30]}",
     }) |src| {
         try testing.expectError(error.InvalidPath, buildExprFromJson(&arena, src));
     }
+
+    // The ceiling itself is accepted, so the rejection above is the
+    // bound and not an off-by-one swallowing valid indices.
+    const at_max = try buildExprFromJson(&arena, "{\"type\":\"ref\",\"path\":[\"input\",4294967295]}");
+    try testing.expectEqual(Expr.max_path_index, at_max.ref[1].index);
 }
 
 test "buildExpr: compare canonical and shorthand are equivalent" {

@@ -36,6 +36,11 @@ COMPARE_OPS = {"equal": "eq", "neq": "neq", "lt": "lt", "lte": "lte", "gt": "gt"
 
 BUILTINS = {"startswith", "endswith", "contains", "count"}
 
+# Largest array index zopa's AST builder accepts (Expr.max_path_index in
+# src/ast.zig). Fixed rather than platform-dependent so the converter
+# and the module agree regardless of where each one runs.
+MAX_PATH_INDEX = 2**32 - 1
+
 
 # ---------------------------------------------------------------------------
 # Module / Rule walkers.
@@ -339,6 +344,16 @@ def _ref_to_path(segments: list[dict[str, Any]]) -> list[str | int]:
             if value < 0 or value != int(value):
                 raise Unsupported(
                     f"array index must be a whole non-negative number, got {value!r}"
+                )
+            # Same ceiling ast.zig enforces. Python ints are unbounded,
+            # so without this a legal-but-absurd literal like
+            # `input.xs[99999999999999999999]` converts here and is
+            # refused later by the module as a bare InvalidPath -- the
+            # one rejection in this walker that would not carry a
+            # described reason.
+            if value > MAX_PATH_INDEX:
+                raise Unsupported(
+                    f"array index above the maximum zopa accepts ({MAX_PATH_INDEX}): {int(value)}"
                 )
             path.append(int(value))
         else:
