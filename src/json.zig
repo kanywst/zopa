@@ -386,8 +386,12 @@ fn decodeEscapes(allocator: std.mem.Allocator, raw: []const u8) ParseError![]u8 
 
 // Helpers shared with the evaluator.
 
-/// Walk a path through nested objects (Rego ref semantics). A leading
-/// `"input"` segment is stripped if present.
+/// Walk a path of member names through nested objects (Rego ref
+/// semantics). A leading `"input"` segment is stripped if present.
+///
+/// Array indices are not expressible here; the evaluator uses
+/// `lookupSegments` for a path that may contain them. This form stays
+/// because several call sites only ever have names.
 pub fn lookupPath(root: Value, path: []const []const u8) !Value {
     var start: usize = 0;
     if (path.len > 0 and std.mem.eql(u8, path[0], "input")) start = 1;
@@ -397,6 +401,46 @@ pub fn lookupPath(root: Value, path: []const []const u8) !Value {
     while (i < path.len) : (i += 1) {
         if (cur != .object) return error.PathNotObject;
         cur = lookupMember(cur.object, path[i]) orelse return error.PathNotFound;
+    }
+    return cur;
+}
+
+/// One step of a path: a member name or an array index.
+///
+/// Declared here rather than taking `ast.PathSegment` so `json.zig`
+/// keeps not importing the AST; `ast.Expr.PathSegment` converts into it.
+pub const Segment = union(enum) {
+    key: []const u8,
+    index: usize,
+};
+
+/// Walk a path that may index into arrays. A leading `"input"` key is
+/// stripped, as in `lookupPath`.
+///
+/// An index into a non-array, or past its end, is `PathNotFound` rather
+/// than an error: Rego treats a ref that does not resolve as undefined,
+/// and the evaluator folds that into a deny. Indexing is the common
+/// case for a path that legitimately misses -- `input.xs[3]` on a
+/// two-element list -- so making it an error would turn ordinary
+/// incomplete input into `-1`.
+pub fn lookupSegments(root: Value, path: []const Segment) !Value {
+    var start: usize = 0;
+    if (path.len > 0 and path[0] == .key and std.mem.eql(u8, path[0].key, "input")) start = 1;
+
+    var cur = root;
+    var i: usize = start;
+    while (i < path.len) : (i += 1) {
+        switch (path[i]) {
+            .key => |name| {
+                if (cur != .object) return error.PathNotObject;
+                cur = lookupMember(cur.object, name) orelse return error.PathNotFound;
+            },
+            .index => |idx| {
+                if (cur != .array) return error.PathNotObject;
+                if (idx >= cur.array.len) return error.PathNotFound;
+                cur = cur.array[idx];
+            },
+        }
     }
     return cur;
 }

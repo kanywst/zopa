@@ -75,6 +75,9 @@ class Refusals(unittest.TestCase):
         # into a rule whose parameter resolved against the input.
         self.assertRefused("f(x) if x == 1", "function definition `f`")
 
+    def test_negative_array_index_is_refused(self):
+        self.assertRefused("allow if input.xs[-1] == 1", "whole non-negative number")
+
     def test_unnamed_operator_is_described(self):
         # `in` reaches OPA's AST as internal.member_2 and has no bare
         # name; reporting an empty one tells the reader nothing.
@@ -98,6 +101,16 @@ class Conversions(unittest.TestCase):
     def test_default_rule(self):
         ast = self.assertConverts("default allow = false")
         self.assertTrue(ast["rules"][0]["default"])
+
+    def test_array_index_becomes_a_numeric_segment(self):
+        ast = self.assertConverts('allow if input.groups[1].name == "ops"')
+        path = ast["rules"][0]["body"][0]["left"]["path"]
+        self.assertEqual(path, ["input", "groups", 1, "name"])
+        # A number, not the string that spells it -- the distinction the
+        # evaluator relies on to keep an object from standing in for an
+        # array.
+        self.assertIsInstance(path[2], int)
+        self.assertNotIsInstance(path[2], bool)
 
     def test_every_with_a_single_expression_body(self):
         ast = self.assertConverts("allow if every x in input.xs { x == 1 }")

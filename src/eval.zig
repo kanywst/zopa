@@ -398,23 +398,44 @@ fn evalCall(
 fn resolveRef(
     input: json.Value,
     scope: ?*const Scope,
-    path: []const []const u8,
+    path: []const ast.Expr.PathSegment,
 ) HelperError!json.Value {
     if (path.len == 0) return error.PathNotFound;
 
-    if (std.mem.eql(u8, path[0], "input")) {
-        return json.lookupPath(input, path);
+    if (path[0].isKey("input")) {
+        return lookupSegments(input, path);
     }
 
+    // Only a name can match a binding. A path opening with an index has
+    // nothing to bind to, so it falls through to the input root, where
+    // it will find a non-array and resolve to undefined.
     var cursor = scope;
     while (cursor) |frame| : (cursor = frame.parent) {
-        if (std.mem.eql(u8, frame.name, path[0])) {
+        if (path[0].isKey(frame.name)) {
             return walkValue(frame.bound, path[1..]);
         }
     }
 
     // No matching binding -- treat as a plain input ref.
-    return json.lookupPath(input, path);
+    return lookupSegments(input, path);
+}
+
+/// Bridge `ast.Expr.PathSegment` to the shape `json.zig` walks. The two
+/// are deliberately separate types so the parser never imports the AST;
+/// this is the one place that has to know both.
+fn lookupSegments(root: json.Value, path: []const ast.Expr.PathSegment) HelperError!json.Value {
+    var buf: [max_eval_depth]json.Segment = undefined;
+    // A path longer than the recursion cap is refused rather than
+    // silently truncated: a truncated path resolves to a *different*
+    // value, which is a wrong decision rather than a refused one.
+    if (path.len > buf.len) return error.EvalTooDeep;
+    for (path, 0..) |seg, i| {
+        buf[i] = switch (seg) {
+            .key => |k| .{ .key = k },
+            .index => |n| .{ .index = n },
+        };
+    }
+    return json.lookupSegments(root, buf[0..path.len]);
 }
 
 /// Walk `path` through `value`. Returns the leaf as-is; the only
@@ -423,11 +444,20 @@ fn resolveRef(
 /// Member lookup goes through `json.lookupMember` so a bound variable
 /// resolves duplicate keys the same last-wins way `json.lookupPath`
 /// does for the input root.
-fn walkValue(value: json.Value, path: []const []const u8) HelperError!json.Value {
+fn walkValue(value: json.Value, path: []const ast.Expr.PathSegment) HelperError!json.Value {
     var cur = value;
     for (path) |segment| {
-        if (cur != .object) return error.PathNotObject;
-        cur = json.lookupMember(cur.object, segment) orelse return error.PathNotFound;
+        switch (segment) {
+            .key => |name| {
+                if (cur != .object) return error.PathNotObject;
+                cur = json.lookupMember(cur.object, name) orelse return error.PathNotFound;
+            },
+            .index => |idx| {
+                if (cur != .array) return error.PathNotObject;
+                if (idx >= cur.array.len) return error.PathNotFound;
+                cur = cur.array[idx];
+            },
+        }
     }
     return cur;
 }
@@ -435,6 +465,69 @@ fn walkValue(value: json.Value, path: []const []const u8) HelperError!json.Value
 // Tests.
 
 const testing = std.testing;
+
+test "ref: array index resolves, and a miss is undefined rather than an error" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const policy =
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","body":[
+        \\  {"type":"compare","op":"eq",
+        \\   "left":{"type":"ref","path":["input","xs",1]},
+        \\   "right":{"type":"value","value":"b"}}]}]}
+    ;
+
+    try testing.expect(try evaluate(&arena, "{\"xs\":[\"a\",\"b\"]}", policy));
+    // Wrong element.
+    try testing.expect(!try evaluate(&arena, "{\"xs\":[\"b\",\"a\"]}", policy));
+    // Past the end, and indexing a non-array: Rego calls both
+    // undefined, so they deny rather than erroring.
+    try testing.expect(!try evaluate(&arena, "{\"xs\":[\"a\"]}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"xs\":{\"1\":\"b\"}}", policy));
+    try testing.expect(!try evaluate(&arena, "{}", policy));
+}
+
+test "ref: an index is not the string key that spells it" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // `{"0": "hit"}` is an object whose key happens to be "0". Indexing
+    // it must not resolve, or an attacker-supplied object could stand in
+    // for the array a policy meant to index.
+    const by_index =
+        \\{"type":"compare","op":"eq",
+        \\ "left":{"type":"ref","path":["input","xs",0]},
+        \\ "right":{"type":"value","value":"hit"}}
+    ;
+    const by_key =
+        \\{"type":"compare","op":"eq",
+        \\ "left":{"type":"ref","path":["input","xs","0"]},
+        \\ "right":{"type":"value","value":"hit"}}
+    ;
+    const object_input = "{\"xs\":{\"0\":\"hit\"}}";
+    const array_input = "{\"xs\":[\"hit\"]}";
+
+    try testing.expect(!try evaluate(&arena, object_input, by_index));
+    try testing.expect(try evaluate(&arena, object_input, by_key));
+    try testing.expect(try evaluate(&arena, array_input, by_index));
+    try testing.expect(!try evaluate(&arena, array_input, by_key));
+}
+
+test "ref: an index walks a value bound by some/every, not just the input root" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const policy =
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","body":[
+        \\  {"type":"some","var":"g","source":{"type":"ref","path":["input","groups"]},
+        \\   "body":{"type":"compare","op":"eq",
+        \\           "left":{"type":"ref","path":["g","members",0]},
+        \\           "right":{"type":"value","value":"root"}}}]}]}
+    ;
+
+    try testing.expect(try evaluate(&arena, "{\"groups\":[{\"members\":[\"x\"]},{\"members\":[\"root\"]}]}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"groups\":[{\"members\":[\"x\"]}]}", policy));
+}
 
 fn run(input: []const u8, ast_src: []const u8) !bool {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

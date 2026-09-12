@@ -35,12 +35,29 @@ pub const CompareOp = enum {
 /// Expression node.
 pub const Expr = union(enum) {
     value: Value,
-    ref: []const []const u8,
+    ref: []const PathSegment,
     compare: Compare,
     not: *const Expr,
     some: Iter,
     every: Iter,
     call: Call,
+
+    /// One step of a `ref` path. A JSON string in the path array is a
+    /// member lookup; a non-negative integer is an array index, which
+    /// is how `input.groups[0].name` is spelled. Keeping them in one
+    /// union rather than encoding an index as the string `"0"` means an
+    /// object whose key really is `"0"` stays reachable and distinct.
+    pub const PathSegment = union(enum) {
+        key: []const u8,
+        index: usize,
+
+        pub fn isKey(self: PathSegment, name: []const u8) bool {
+            return switch (self) {
+                .key => |k| std.mem.eql(u8, k, name),
+                .index => false,
+            };
+        }
+    };
 
     pub const Compare = struct {
         op: CompareOp,
@@ -264,10 +281,23 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
     } else if (std.mem.eql(u8, t, "ref")) {
         const path_v = try requireField(obj, "path");
         if (path_v != .array) return error.InvalidPath;
-        const parts = try allocator.alloc([]const u8, path_v.array.len);
+        const parts = try allocator.alloc(Expr.PathSegment, path_v.array.len);
         for (path_v.array, 0..) |part, i| {
-            if (part != .string) return error.InvalidPath;
-            parts[i] = part.string;
+            parts[i] = switch (part) {
+                .string => |k| .{ .key = k },
+                // Rego array indices are non-negative integers. A
+                // fractional or negative one is a malformed path rather
+                // than a lookup that happens to miss, so it is rejected
+                // when the AST is built instead of resolving to
+                // undefined at every evaluation.
+                .number => |n| blk: {
+                    if (n < 0 or n != @floor(n)) return error.InvalidPath;
+                    const max = std.math.maxInt(usize);
+                    if (n > @as(f64, @floatFromInt(max))) return error.InvalidPath;
+                    break :blk .{ .index = @intFromFloat(n) };
+                },
+                else => return error.InvalidPath,
+            };
         }
         expr.* = .{ .ref = parts };
     } else if (std.mem.eql(u8, t, "compare") or CompareOp.fromString(t) != null) {
@@ -366,7 +396,36 @@ test "buildExpr: ref" {
     const e = try buildExprFromJson(&arena, "{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}");
     try testing.expect(e.* == .ref);
     try testing.expectEqual(@as(usize, 2), e.ref.len);
-    try testing.expectEqualStrings("input", e.ref[0]);
+    try testing.expect(e.ref[0].isKey("input"));
+    try testing.expect(e.ref[1].isKey("x"));
+}
+
+test "buildExpr: ref with an array index" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const e = try buildExprFromJson(&arena, "{\"type\":\"ref\",\"path\":[\"input\",\"xs\",2]}");
+    try testing.expectEqual(@as(usize, 3), e.ref.len);
+    try testing.expect(e.ref[2] == .index);
+    try testing.expectEqual(@as(usize, 2), e.ref[2].index);
+    // An index is not a key, so it can never match a scope binding or
+    // the `input` prefix even when the number would stringify to one.
+    try testing.expect(!e.ref[2].isKey("2"));
+}
+
+test "buildExpr: a path index that is not a whole non-negative number is rejected" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    // Refusing these when the AST is built, rather than letting them
+    // resolve to undefined on every request, keeps a malformed policy a
+    // configure-time failure instead of a silent permanent deny.
+    for ([_][]const u8{
+        "{\"type\":\"ref\",\"path\":[\"input\",-1]}",
+        "{\"type\":\"ref\",\"path\":[\"input\",1.5]}",
+        "{\"type\":\"ref\",\"path\":[\"input\",true]}",
+        "{\"type\":\"ref\",\"path\":[\"input\",null]}",
+    }) |src| {
+        try testing.expectError(error.InvalidPath, buildExprFromJson(&arena, src));
+    }
 }
 
 test "buildExpr: compare canonical and shorthand are equivalent" {

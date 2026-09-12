@@ -1,0 +1,12 @@
+{
+  "name":  "array_index",
+  "note":  "Array indexing, end to end: rego -> opa parse -> rego2ast -> zopa. The object case pins that an index does not resolve against a key that spells the same digits, which would let a supplied object stand in for the array the policy meant to index.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if input.groups[1].name == \"ops\"\n",
+  "cases": [
+    { "input": { "groups": [ { "name": "dev" }, { "name": "ops" } ] }, "expected": 1 },
+    { "input": { "groups": [ { "name": "ops" }, { "name": "dev" } ] }, "expected": 0 },
+    { "input": { "groups": [ { "name": "dev" } ] },                    "expected": 0 },
+    { "input": { "groups": { "1": { "name": "ops" } } },               "expected": 0 },
+    { "input": {},                                                     "expected": 0 }
+  ]
+}

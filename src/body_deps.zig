@@ -116,7 +116,7 @@ fn visit(st: *State, expr: *const ast.Expr) void {
     }
 }
 
-fn visitRef(st: *State, path: []const []const u8) void {
+fn visitRef(st: *State, path: []const ast.Expr.PathSegment) void {
     switch (classifyRef(path)) {
         .none => {},
         .whole => st.refs_whole = true,
@@ -150,13 +150,15 @@ const RefKind = enum {
 /// asking to handle truncation itself; classifying it as a body
 /// reference would make the shim refuse the request before the policy
 /// ever saw the flag.
-fn classifyRef(path: []const []const u8) RefKind {
+fn classifyRef(path: []const ast.Expr.PathSegment) RefKind {
     var p = path;
-    if (p.len > 0 and std.mem.eql(u8, p[0], "input")) p = p[1..];
+    if (p.len > 0 and p[0].isKey("input")) p = p[1..];
     if (p.len == 0) return .none;
 
-    if (std.mem.eql(u8, p[0], "body_raw")) return .whole;
-    if (!std.mem.eql(u8, p[0], "body")) return .none;
+    // An index cannot name `body` or `body_raw`, so a path opening with
+    // one reaches neither and classifies as touching nothing.
+    if (p[0].isKey("body_raw")) return .whole;
+    if (!p[0].isKey("body")) return .none;
     return if (p.len == 1) .whole else .prefix;
 }
 

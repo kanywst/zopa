@@ -64,6 +64,7 @@ CORPUS: list[tuple[str, str, str]] = [
     ("ref/nested", "nested input path", "allow if input.a.b.c == 1"),
     ("ref/bracket", "bracket string key", 'allow if input["a"] == 1'),
     ("ref/array-index", "array index", "allow if input.x[0] == 1"),
+    ("ref/array-index-nested", "array index followed by a field", 'allow if input.g[1].name == "ops"'),
     ("ref/data", "data document", "allow if data.x == 1"),
 
     # --- logic ---

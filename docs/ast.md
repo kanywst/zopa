@@ -126,7 +126,17 @@ What you cannot do is write two *non-default* rules that disagree and expect one
 
 Refs walk the active scope chain first, then the input root. A leading `"input"` segment is stripped (it just names the input root, matching Rego's convention).
 
-A missing path is *undefined*, treated as `false` in body position -- deny-by-default.
+A path segment is either a **string** (member lookup) or a **non-negative whole number** (array index):
+
+```json
+{ "type": "ref", "path": ["input", "groups", 1, "name"] }
+```
+
+which is how `input.groups[1].name` is spelled. The two kinds stay distinct: indexing `{"groups": {"1": {...}}}` does **not** resolve, and looking up the key `"1"` does not index an array. Collapsing them would let a supplied object stand in for the array a policy meant to index.
+
+An index that is negative, fractional, or not a number is rejected when the AST is built (`error.InvalidPath`) rather than resolving to undefined on every request -- a malformed policy should fail at configure time, not become a silent permanent deny.
+
+A missing path is *undefined*, treated as `false` in body position -- deny-by-default. That covers an index past the end of an array and an index into something that is not an array, both of which Rego also calls undefined.
 
 ### `compare` -- binary comparison
 
