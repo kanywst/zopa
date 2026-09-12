@@ -62,6 +62,10 @@ free = exports["free"]
 evaluate = exports["evaluate"]
 evaluate_target = exports["evaluate_target"]
 evaluate_addressed = exports["evaluate_addressed"]
+policy_compile = exports["policy_compile"]
+policy_release = exports["policy_release"]
+evaluate_compiled = exports["evaluate_compiled"]
+evaluate_compiled_addressed = exports["evaluate_compiled_addressed"]
 memory: wasmtime.Memory = exports["memory"]
 
 
@@ -112,6 +116,36 @@ def decide_addressed(input_obj, ast_obj, package: str, target: str) -> int:
     finally:
         free(store, ip)
         free(store, ap)
+        free(store, pp)
+        free(store, tp)
+
+
+def compile_policy(ast_obj) -> int:
+    """Build a policy once and return its handle. -1 means the AST did
+    not parse or did not build."""
+    ap, al = write_json(ast_obj)
+    try:
+        return policy_compile(store, ap, al)
+    finally:
+        free(store, ap)
+
+
+def decide_compiled(handle: int, input_obj) -> int:
+    ip, il = write_json(input_obj)
+    try:
+        return evaluate_compiled(store, handle, ip, il)
+    finally:
+        free(store, ip)
+
+
+def decide_compiled_addressed(handle: int, input_obj, package: str, target: str) -> int:
+    ip, il = write_json(input_obj)
+    pp, pl = write_bytes(package.encode("utf-8"))
+    tp, tl = write_bytes(target.encode("utf-8"))
+    try:
+        return evaluate_compiled_addressed(store, handle, ip, il, pp, pl, tp, tl)
+    finally:
+        free(store, ip)
         free(store, pp)
         free(store, tp)
 
@@ -764,6 +798,131 @@ check(
         "allow_body",
     ),
     1,
+)
+
+# ---------------------------------------------------------------------------
+# Compiled policies. This runtime binds the exports too, so a divergence
+# between wasmtime and Node in how a held policy behaves is caught here
+# rather than in production -- catching runtime-specific divergence is
+# the only reason this suite exists separately from run.mjs.
+# ---------------------------------------------------------------------------
+compiled_policy = {
+    "type": "module",
+    "rules": [
+        {
+            "type": "rule",
+            "name": "allow",
+            "default": True,
+            "value": {"type": "value", "value": False},
+        },
+        {
+            "type": "rule",
+            "name": "allow",
+            "body": [
+                {
+                    "type": "eq",
+                    "left": {"type": "ref", "path": ["input", "user", "role"]},
+                    "right": {"type": "value", "value": "admin"},
+                }
+            ],
+        },
+    ],
+}
+
+compiled_handle = compile_policy(compiled_policy)
+check("policy_compile returns a positive handle", compiled_handle > 0, True)
+
+for label, payload, expected in (
+    ("admin -> allow", {"user": {"role": "admin"}}, 1),
+    ("guest -> deny", {"user": {"role": "guest"}}, 0),
+    ("missing user -> deny", {}, 0),
+):
+    check(f"compiled: {label}", decide_compiled(compiled_handle, payload), expected)
+    # Holding a policy must not be able to change a decision.
+    check(
+        f"compiled agrees with one-shot: {label}",
+        decide_compiled(compiled_handle, payload),
+        decide(payload, compiled_policy),
+    )
+
+# The AST has to outlive the request arena's reset, which happens on
+# every one of these calls.
+check(
+    "compiled: 200 evaluations against one handle stay stable",
+    all(decide_compiled(compiled_handle, {"user": {"role": "admin"}}) == 1 for _ in range(200)),
+    True,
+)
+
+packaged_handle = compile_policy(
+    {
+        "type": "modules",
+        "modules": [
+            {
+                "type": "module",
+                "package": "authz",
+                "rules": [
+                    {
+                        "type": "rule",
+                        "name": "allow",
+                        "body": [
+                            {
+                                "type": "eq",
+                                "left": {"type": "ref", "path": ["input", "user", "role"]},
+                                "right": {"type": "value", "value": "admin"},
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+)
+check(
+    "compiled_addressed: authz.allow fires for admin",
+    decide_compiled_addressed(packaged_handle, {"user": {"role": "admin"}}, "authz", "allow"),
+    1,
+)
+
+handle_a = compile_policy(compiled_policy)
+handle_b = compile_policy({"type": "value", "value": True})
+check("compiled: distinct policies get distinct handles", handle_a != handle_b, True)
+check("compiled: handle A denies a guest", decide_compiled(handle_a, {"user": {"role": "guest"}}), 0)
+check("compiled: handle B allows anything", decide_compiled(handle_b, {}), 1)
+check("policy_release frees a live handle", policy_release(store, handle_a), 1)
+check("compiled: releasing A left B working", decide_compiled(handle_b, {}), 1)
+
+# Every way of naming a policy that is not there denies rather than
+# following a dangling reference.
+check("compiled: use after release -> -1", decide_compiled(handle_a, {}), -1)
+check("compiled: double release -> 0", policy_release(store, handle_a), 0)
+check("compiled: handle 0 -> -1", decide_compiled(0, {}), -1)
+check("compiled: negative handle -> -1", decide_compiled(-1, {}), -1)
+check("compiled: handle past the table -> -1", decide_compiled(9999, {}), -1)
+check("compiled: releasing an unissued handle -> 0", policy_release(store, 9999), 0)
+
+check("policy_compile rejects malformed JSON", compile_policy("{ not json"), -1)
+check(
+    "policy_compile rejects two defaults for one rule",
+    compile_policy(
+        {
+            "type": "module",
+            "rules": [
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "default": True,
+                    "value": {"type": "value", "value": False},
+                },
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "default": True,
+                    "value": {"type": "value", "value": True},
+                },
+            ],
+        }
+    ),
+    -1,
 )
 
 if failed:

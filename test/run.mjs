@@ -934,6 +934,127 @@ check(
   1,
 );
 
+// ---------------------------------------------------------------------------
+// 16. Compiled policies: policy_compile / evaluate_compiled /
+//     policy_release. The generic `evaluate` re-parses the AST on every
+//     call; these let a host build it once. The property that matters
+//     is that holding a policy cannot change a decision, so every case
+//     is checked against the one-shot path rather than against a
+//     hard-coded expectation alone.
+// ---------------------------------------------------------------------------
+const {
+  policy_compile,
+  policy_release,
+  evaluate_compiled,
+  evaluate_compiled_addressed,
+} = instance.exports;
+
+function compilePolicy(ast) {
+  const a = writeJson(ast);
+  try {
+    return policy_compile(a.ptr, a.len);
+  } finally {
+    freeBuf(a);
+  }
+}
+
+function decideCompiled(handle, input) {
+  const i = writeJson(input);
+  try {
+    return evaluate_compiled(handle, i.ptr, i.len);
+  } finally {
+    freeBuf(i);
+  }
+}
+
+function decideCompiledAddressed(handle, input, pkg, target) {
+  const i = writeJson(input);
+  const p = writeBytes(enc.encode(pkg));
+  const t = writeBytes(enc.encode(target));
+  try {
+    return evaluate_compiled_addressed(handle, i.ptr, i.len, p.ptr, p.len, t.ptr, t.len);
+  } finally {
+    freeBuf(i);
+    freeBuf(p);
+    freeBuf(t);
+  }
+}
+
+const compiledPolicy = {
+  type: "module",
+  rules: [
+    { type: "rule", name: "allow", default: true, value: { type: "value", value: false } },
+    {
+      type: "rule",
+      name: "allow",
+      body: [{ type: "eq", left: refRole, right: { type: "value", value: "admin" } }],
+    },
+  ],
+};
+
+const compiledHandle = compilePolicy(compiledPolicy);
+check('policy_compile returns a positive handle', compiledHandle > 0, true);
+
+for (const [label, input, expected] of [
+  ['admin -> allow', { user: { role: 'admin' } }, 1],
+  ['guest -> deny', { user: { role: 'guest' } }, 0],
+  ['missing user -> deny', {}, 0],
+]) {
+  check(`compiled: ${label}`, decideCompiled(compiledHandle, input), expected);
+  // The whole point is that this is the same decision, faster.
+  check(`compiled agrees with one-shot: ${label}`, decideCompiled(compiledHandle, input), decide(input, compiledPolicy));
+}
+
+// A held policy has to survive the request arena being reset under it
+// on every call. If the AST were ever allocated from that arena this
+// loop would read freed memory rather than answer consistently.
+let stable = true;
+for (let k = 0; k < 200; k++) {
+  if (decideCompiled(compiledHandle, { user: { role: 'admin' } }) !== 1) stable = false;
+}
+check('compiled: 200 evaluations against one handle stay stable', stable, true);
+
+check(
+  'compiled_addressed: authz.allow fires for admin',
+  decideCompiledAddressed(compilePolicy(addressedPackages), { user: { role: 'admin' } }, 'authz', 'allow'),
+  1,
+);
+
+// Two handles must not disturb each other, and releasing one must not
+// affect the other.
+const handleA = compilePolicy(compiledPolicy);
+const handleB = compilePolicy({ type: "value", value: true });
+check('compiled: distinct policies get distinct handles', handleA !== handleB, true);
+check('compiled: handle A denies a guest', decideCompiled(handleA, { user: { role: 'guest' } }), 0);
+check('compiled: handle B allows anything', decideCompiled(handleB, {}), 1);
+check('policy_release frees a live handle', policy_release(handleA), 1);
+check('compiled: releasing A left B working', decideCompiled(handleB, {}), 1);
+
+// Every way of naming a policy that isn't there has to deny, not read
+// whatever the allocator left behind. -1 is the error code, which the
+// proxy-wasm shim and every documented caller treat as deny.
+check('compiled: use after release -> -1', decideCompiled(handleA, {}), -1);
+check('compiled: double release -> 0', policy_release(handleA), 0);
+check('compiled: handle 0 -> -1', decideCompiled(0, {}), -1);
+check('compiled: negative handle -> -1', decideCompiled(-1, {}), -1);
+check('compiled: handle past the table -> -1', decideCompiled(9999, {}), -1);
+check('compiled: releasing an unissued handle -> 0', policy_release(9999), 0);
+
+// A policy that will not build must not yield a handle.
+check('policy_compile rejects malformed JSON', compilePolicy('{ not json'), -1);
+check(
+  'policy_compile rejects two defaults for one rule',
+  compilePolicy({
+    type: "module",
+    rules: [
+      { type: "rule", name: "allow", default: true, value: { type: "value", value: false } },
+      { type: "rule", name: "allow", default: true, value: { type: "value", value: true } },
+    ],
+  }),
+  -1,
+);
+
+
 if (failed > 0) {
   console.error(`\n${failed} test(s) failed`);
   exit(1);

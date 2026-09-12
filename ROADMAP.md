@@ -30,7 +30,7 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 
 - **Body-aware policies.** New `allow_body` target rule fires from `proxy_on_request_body` against `{body, body_raw}` once end of stream is reached. Phase opts in via the rule's presence so v0.1 request-only policies still pass response and body phases through unchanged. Per-context request snapshot deferred to v2 (see `docs/proposals/body-aware-policies.md`).
 - **Response-side policies.** `allow_response` target rule fires from `proxy_on_response_headers` against `{response: {status, headers}}`. Deny replaces the upstream response with a fixed 503 (structured replacement deferred).
-- **Compiled-policy benchmark.** `zig build bench` runs a Node-based benchmark over `bench/fixtures/`, now against OPA-in-wasm and an OPA HTTP sidecar as well as zopa, gated on every engine agreeing on the decision before anything is timed. Reports p50/p95/p99, an uninstrumented amortised cost, throughput, memory after warm-up, deployed artifact size, and cold start. Numbers and caveats in [`bench/README.md`](bench/README.md).
+- **Compiled-policy benchmark.** `zig build bench` runs a Node-based latency benchmark over `bench/fixtures/`. Extended after v0.3.1 into the cross-engine comparison below.
 - **AST conformance harness.** `tools/rego2ast.py` converts `opa parse --format json` output into zopa's AST; `test/conformance/` drives a small fixture suite end-to-end. CI runs it on every PR.
 - **Set/object refs.** `iterItems` resolves refs into JSON objects; `some` / `every` pick `kind: "keys" | "values"` (default keys).
 - **Function calls.** `startswith`, `endswith`, `contains`, `count` via the new `call` AST node.
@@ -40,6 +40,8 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 
 ## Near term
 
+- **Cross-engine benchmark.** `zig build bench` now runs zopa (both generic-ABI shapes), OPA compiled to wasm, and an OPA HTTP sidecar over the same fixtures, gated on every engine agreeing on the decision before anything is timed. Reports p50/p95/p99, an uninstrumented amortised cost, throughput, memory after warm-up, deployed artifact size, and cold start. Numbers and caveats in [`bench/README.md`](bench/README.md).
+- **Compiled-policy export.** `policy_compile` / `policy_release` / `evaluate_compiled` / `evaluate_compiled_addressed` let a generic-ABI host build a policy once and evaluate against a handle, which is what the proxy-wasm path has always done internally. This was the benchmark's clearest finding: through `evaluate` zopa answered the RBAC fixture in 5.76 us against OPA-in-wasm's 2.24; against a held policy it answers in 1.32. The AST parse was the entire difference.
 - **Streaming evaluation runtime.** Build on the body-deps analyser to skip body buffering when no body refs exist, or short-circuit as soon as referenced prefixes resolve. Design in `docs/proposals/streaming-evaluation.md`.
 - **Conformance corpus expansion.** Vendor a slice of the OPA upstream test corpus and grow `tools/rego2ast.py` to cover enough of the Rego subset for `pass / total` to become a meaningful coverage number.
 - **Structured response replacement.** Surface a `json.Value` from the evaluator so a denied `allow_response` rule can return `{status, body, headers}` instead of the fixed 503.
@@ -47,7 +49,6 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 
 ## Medium term
 
-- **Compiled-policy export.** The benchmark's clearest finding is that OPA's WASM build answers the realistic RBAC fixture in 2.24 us against zopa's 5.80, because the generic `evaluate` re-parses the AST on every call while OPA's module holds a compiled policy. The proxy-wasm path already builds once in `proxy_on_configure`; what is missing is an export that hands a host the same pre-built handle. That is the one change that would move the row zopa currently loses.
 - **Cedar in the benchmark.** The only engine from the original cross-engine plan still unmeasured. No first-party binding is reachable from Node without a dependency, so this means either a second harness in Rust or waiting for one.
 - **Per-root-context policies.** `proxy_on_configure` currently ignores the root context id, so a VM shared by two filter configurations (an explicit shared `vm_id`) keeps only the last policy. Supporting more than one needs a root-context table plus a stream→root mapping recorded in `proxy_on_context_create`.
 - **proxy-wasm 0.3.x** when the spec stabilizes (design in `docs/proposals/proxy-wasm-0-3.md`). Still an open milestone upstream as of August 2026; `proxy_on_memory_allocate` is the only vNEXT piece adopted so far.

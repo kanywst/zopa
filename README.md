@@ -71,27 +71,30 @@ zig build --release=small        # -> zig-out/bin/zopa.wasm, ~60 KB
 
 ## Numbers
 
-Release build against the two things zopa is meant to replace: OPA compiled to WASM and loaded in-process, and OPA run as a sidecar over loopback HTTP. `zig build bench`, Node host, 10k iterations after 1k warm-up. No engine is timed until all of them have returned the same decision for the fixture, so each row is a comparison rather than three unrelated measurements.
+Release build against the two things zopa is meant to replace: OPA compiled to WASM and loaded in-process, and OPA run as a sidecar over loopback HTTP. `zig build bench`, Node host, 10k iterations after 1k warm-up. No engine is timed until all of them have returned the same decision for the fixture, so each row is a comparison rather than several unrelated measurements.
+
+zopa appears twice, because the two generic-ABI shapes cost very different amounts. `evaluate(input, ast)` is handed the policy on every call and re-parses it; `policy_compile` + `evaluate_compiled(handle, input)` builds it once and keeps it, which is what the proxy-wasm path has always done internally.
 
 Per-decision cost, microseconds:
 
-| Policy                                        | zopa     | OPA (wasm) | OPA (sidecar) |
-| --------------------------------------------- | -------- | ---------- | ------------- |
-| literal `allow = true`                        | **0.32** | 0.82       | 133           |
-| `input.method == "GET"`                       | 0.98     | **0.95**   | 140           |
-| default-deny RBAC: path prefix + role + perms | 5.80     | **2.24**   | 145           |
+| Policy                                        | zopa (evaluate) | zopa (compiled) | OPA (wasm) | OPA (sidecar) |
+| --------------------------------------------- | --------------- | --------------- | ---------- | ------------- |
+| literal `allow = true`                        | 0.36            | **0.08**        | 0.82       | 138           |
+| `input.method == "GET"`                       | 0.97            | **0.19**        | 0.96       | 132           |
+| default-deny RBAC: path prefix + role + perms | 5.76            | **1.32**        | 2.24       | 149           |
 
 | | zopa | OPA (wasm) | OPA (sidecar) |
 | --- | --- | --- | --- |
-| deployed artifact | **61 KB**, all policies | 131 KB **per policy** | — |
+| deployed artifact | **63 KB**, all policies | 131 KB **per policy** | — |
 | memory after warm-up | 1.4 MB | **128 KB** | 23 MB |
-| cold start | **0.4 ms** | 0.5 ms | 30-63 ms |
+| cold start | **0.4 ms** | 0.5 ms | 30-60 ms |
 
-Read those honestly, because two rows do not favour zopa:
+What those say:
 
-- **Against a sidecar, either in-process engine wins by ~150x.** That is the claim zopa is built on and it holds with room to spare. It is also the least interesting row: it compares a TCP round trip to a function call.
-- **OPA's WASM build is 2.6x faster than zopa on the realistic policy.** The generic `evaluate` export gets the AST bytes on every call and cannot know they are the ones it parsed last time, so a policy parse sits inside every measurement -- on the RBAC row it is most of the number. The proxy-wasm path builds the policy once in `proxy_on_configure` and keeps it, but no export takes a pre-built policy handle, so the path that would win this row is the one the benchmark cannot reach. Treat the zopa column as an upper bound on in-Envoy cost.
-- **zopa holds more WASM memory than OPA's module does.** The arena is reset with `.retain_capacity`, trading a ~1.4 MB steady-state floor for never calling `memory.grow` again. A smaller binary does not imply a smaller runtime footprint.
+- **Compile the policy once if you serve traffic.** The gap between the two zopa columns is the AST parse and nothing else: 4.4 µs of the 5.76 on the RBAC row. `evaluate` is for tests, one-shot callers, and hosts that genuinely get a different policy every time.
+- **Held that way, zopa is faster than OPA's wasm build on every fixture,** and 1.7x faster on the realistic one. Through `evaluate` it was 2.6x slower on that same row -- the parse was the whole difference.
+- **Against a sidecar, either in-process engine wins by ~100x.** That is the claim zopa is built on. It is also the least interesting row: it compares a TCP round trip to a function call.
+- **zopa holds more WASM memory than OPA's module does** -- ~1.4 MB against 128 KB. The arena is reset with `.retain_capacity`, trading a steady-state floor for never calling `memory.grow` again. A smaller binary does not imply a smaller runtime footprint.
 
 Every row is reproducible from a clean checkout, but the machine is a developer laptop: treat the ratios as the signal and re-run `zig build bench` on your own hardware before quoting an absolute number. Full method, and what is deliberately not measured, in [`bench/README.md`](bench/README.md).
 
@@ -129,16 +132,22 @@ Reaching for the wrong tool costs more than the 60 KB saves:
 
 ### Exports
 
-| Export                     | Signature                            | Purpose                                                           |
-| -------------------------- | ------------------------------------ | ----------------------------------------------------------------- |
-| `malloc`                   | `(len) -> ptr`                       | Allocate a buffer the host owns.                                  |
-| `proxy_on_memory_allocate` | `(len) -> ptr`                       | Same allocator under the name proxy-wasm vNEXT hosts probe for.   |
-| `free`                     | `(ptr)`                              | Release a buffer from `malloc`. The length lives in a prefix.     |
-| `evaluate`                 | `(input, ast) -> i32`                | Decide `allow` in the default package.                            |
-| `evaluate_target`          | `(input, ast, rule) -> i32`          | Decide a named rule: `allow_body`, `allow_response`, or your own. |
-| `evaluate_addressed`       | `(input, ast, package, rule) -> i32` | Decide `package.rule` inside a `modules` bundle.                  |
+| Export                        | Signature                               | Purpose                                                           |
+| ----------------------------- | --------------------------------------- | ----------------------------------------------------------------- |
+| `malloc`                      | `(len) -> ptr`                          | Allocate a buffer the host owns.                                  |
+| `proxy_on_memory_allocate`    | `(len) -> ptr`                          | Same allocator under the name proxy-wasm vNEXT hosts probe for.   |
+| `free`                        | `(ptr)`                                 | Release a buffer from `malloc`. The length lives in a prefix.     |
+| `evaluate`                    | `(input, ast) -> i32`                   | Decide `allow` in the default package.                            |
+| `evaluate_target`             | `(input, ast, rule) -> i32`             | Decide a named rule: `allow_body`, `allow_response`, or your own. |
+| `evaluate_addressed`          | `(input, ast, package, rule) -> i32`    | Decide `package.rule` inside a `modules` bundle.                  |
+| `policy_compile`              | `(ast) -> i32`                          | Build a policy once and get a handle. `-1` if it will not build.  |
+| `policy_release`              | `(handle) -> i32`                       | Free a compiled policy. `1` if it was live, `0` if not.           |
+| `evaluate_compiled`           | `(handle, input) -> i32`                | Decide `allow` against a held policy.                             |
+| `evaluate_compiled_addressed` | `(handle, input, package, rule) -> i32` | Decide `package.rule` against a held policy.                      |
 
-The three decision exports return `1` (allow), `0` (deny), or `-1` (error). Treat `-1` as deny; it means the input or policy could not be evaluated, which is never a grant.
+The five decision exports return `1` (allow), `0` (deny), or `-1` (error). Treat `-1` as deny; it means the input or policy could not be evaluated, which is never a grant. A handle that was never issued, or has already been released, is an error and therefore denies.
+
+**Compile once if you serve traffic.** `evaluate` is handed the AST on every call and cannot know it is the same one as last time, so it re-parses and rebuilds the policy each request -- on the benchmark's RBAC fixture that is 4.4 µs of 5.76. `policy_compile` builds it onto its own arena and hands back a handle; `evaluate_compiled` then does the input parse and the rule walk and nothing else. The host owns the handle and must `policy_release` it; nothing in the module can know when you are done, so a handle you drop leaks the policy for the life of the module, exactly like a `malloc` you never free. This is the arrangement the proxy-wasm path has always used internally.
 
 Buffers passed in must stay alive for the duration of the call -- string values in the parsed tree alias them rather than being copied.
 

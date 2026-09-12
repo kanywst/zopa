@@ -1,10 +1,16 @@
-// zopa via the generic `evaluate(input, ast)` export.
+// zopa, in both of its generic-ABI shapes.
 //
-// This is the upper bound on zopa's per-request cost, not an estimate
-// of it: `evaluate` receives the AST bytes every call and cannot know
-// they are the ones it parsed last time, so the policy parse is inside
-// the measurement. The proxy-wasm path parses once at configure time.
-// bench/README.md says more about why that gap is not closed here.
+// `zopa` drives `evaluate(input, ast)`, which is handed the policy on
+// every call and so pays a parse and an AST build per decision. That is
+// an upper bound on the per-request cost, not an estimate of it.
+//
+// `zopa-compiled` drives `policy_compile` once and then
+// `evaluate_compiled(handle, input)`, which is the arrangement
+// proxy-wasm has always used internally: parse the input, walk the
+// rules, nothing else. Both are measured because the gap between them
+// is the interesting number -- it is exactly what the AST parse costs,
+// and it is why the one-shot path loses to OPA's wasm build on the RBAC
+// fixture.
 
 import { readFileSync, statSync } from 'node:fs';
 

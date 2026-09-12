@@ -16,11 +16,12 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import * as zopa from './engines/zopa.mjs';
+import * as zopaCompiled from './engines/zopa-compiled.mjs';
 import * as opaWasm from './engines/opa-wasm.mjs';
 import * as opaHttp from './engines/opa-http.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ALL_ENGINES = [zopa, opaWasm, opaHttp];
+const ALL_ENGINES = [zopa, zopaCompiled, opaWasm, opaHttp];
 
 // ---------------------------------------------------------------- args
 
@@ -240,11 +241,11 @@ const kib = (b, n) => (b === null ? '-'.padStart(n) : (b / 1024).toFixed(0).padS
 
 console.log(`\nlatency per decision, microseconds (${BUDGET.iters} iterations after ${BUDGET.warmup} warm-up,`);
 console.log(`minus a ${TIMER_FLOOR.toFixed(2)} us clock-read floor; every engine agreed on every decision shown)\n`);
-console.log(`${pad('fixture', 16)}| ${pad('engine', 10)}| dec |    p50 |    p95 |    p99 |  amort`);
-console.log(`${'-'.repeat(16)}+${'-'.repeat(11)}+-----+--------+--------+--------+-------`);
+console.log(`${pad('fixture', 16)}| ${pad('engine', 14)}| dec |    p50 |    p95 |    p99 |  amort`);
+console.log(`${'-'.repeat(16)}+${'-'.repeat(15)}+-----+--------+--------+--------+-------`);
 for (const r of results) {
   console.log(
-    `${pad(r.fixture, 16)}| ${pad(r.engine, 10)}|${String(r.decision).padStart(4)} |${num(r.p50, 7)} |${num(r.p95, 7)} |${num(r.p99, 7)} |${num(r.amortizedMicros, 7)}`,
+    `${pad(r.fixture, 16)}| ${pad(r.engine, 14)}|${String(r.decision).padStart(4)} |${num(r.p50, 7)} |${num(r.p95, 7)} |${num(r.p99, 7)} |${num(r.amortizedMicros, 7)}`,
   );
 }
 console.log('\n`amort` is the uninstrumented per-decision cost (1s loop / count). Where it sits');
@@ -252,11 +253,11 @@ console.log('well below p50, the clock reads around each iteration are most of w
 console.log('trust amort for the level and the percentiles for the shape of the tail.');
 
 console.log('\nper engine: throughput (single sequential caller), memory after warm-up, cold start\n');
-console.log(`${pad('fixture', 16)}| ${pad('engine', 10)}|      ops/s | mem KiB | artifact KiB | cold ms`);
-console.log(`${'-'.repeat(16)}+${'-'.repeat(11)}+------------+---------+--------------+--------`);
+console.log(`${pad('fixture', 16)}| ${pad('engine', 14)}|      ops/s | mem KiB | artifact KiB | cold ms`);
+console.log(`${'-'.repeat(16)}+${'-'.repeat(15)}+------------+---------+--------------+--------`);
 for (const r of results) {
   console.log(
-    `${pad(r.fixture, 16)}| ${pad(r.engine, 10)}|${num(r.opsPerSec, 11, 0)} |${kib(r.memoryBytes, 8)} |${kib(r.artifactBytes, 13)} |${num(r.coldStartMs, 8, 2)}`,
+    `${pad(r.fixture, 16)}| ${pad(r.engine, 14)}|${num(r.opsPerSec, 11, 0)} |${kib(r.memoryBytes, 8)} |${kib(r.artifactBytes, 13)} |${num(r.coldStartMs, 8, 2)}`,
   );
 }
 

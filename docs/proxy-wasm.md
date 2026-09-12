@@ -64,6 +64,21 @@ Detection is a real AST walk, not a substring match over the policy text, so a l
 | `evaluate_target`    | `(input_ptr, input_len, ast_ptr, ast_len, target_ptr, target_len) -> i32`                           | Same as `evaluate` but with an explicit target rule (e.g. `allow_response`, `allow_body`).   |
 | `evaluate_addressed` | `(input_ptr, input_len, ast_ptr, ast_len, package_ptr, package_len, target_ptr, target_len) -> i32` | Dispatches into a specific `(package, rule)` pair within a `{"type":"modules", ...}` bundle. |
 
+### Compiled policies (generic ABI)
+
+The exports above receive the AST bytes on every call, so each one pays a JSON parse and an AST build. A host driving the same policy across requests should build it once instead. This is the same arrangement `proxy_on_configure` uses internally, exposed for hosts that are not proxy-wasm.
+
+| Name                          | Signature                                                                                 | Notes                                                                           |
+| ----------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `policy_compile`              | `(ast_ptr, ast_len) -> i32`                                                               | Positive handle on success, `-1` if the AST will not parse or will not build.   |
+| `policy_release`              | `(handle) -> i32`                                                                         | `1` if a live policy was freed, `0` for an unissued or already-released handle. |
+| `evaluate_compiled`           | `(handle, input_ptr, input_len) -> i32`                                                   | Targets package `""` + rule `"allow"` against the held policy.                  |
+| `evaluate_compiled_addressed` | `(handle, input_ptr, input_len, package_ptr, package_len, target_ptr, target_len) -> i32` | Dispatches into `(package, rule)` against the held policy.                      |
+
+Ownership: `policy_compile` copies the AST bytes onto the policy's own arena, so the caller may free its buffer as soon as the call returns. The policy itself lives until `policy_release`. Nothing in the module can know when a host is finished with a policy, so a dropped handle leaks it for the life of the module -- the same contract as `malloc`.
+
+Handles are table indices, not pointers, and are validated on every use. A stale, doubled, zero, or forged handle returns `-1`, which every documented caller denies on. Returning raw pointers would turn the same host mistake into a read of arbitrary linear memory, which in an authorization engine is a bypass primitive rather than a crash.
+
 ## Imports
 
 The host must provide all of these. zopa does not feature-test -- unresolved imports cause module instantiation to fail.
