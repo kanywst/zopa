@@ -222,16 +222,27 @@ fn evalBodyScoped(
     for (body, 0..) |expr, i| {
         switch (expr.*) {
             .assign => |a| {
-                // A binding whose value is undefined makes the body
-                // undefined, same as any other unresolved ref: deny
-                // rather than binding null and carrying on, which would
-                // let `x := input.missing` silently compare equal to
-                // another missing field.
-                const bound = resolveValue(a.value, input, scope, depth + 1) catch |err| switch (err) {
-                    error.PathNotFound, error.PathNotObject => return false,
-                    else => return err,
+                // A binding whose value is *undefined* makes the body
+                // undefined -- deny rather than binding null and
+                // carrying on, which would let `x := input.missing`
+                // compare equal to another missing field.
+                //
+                // An explicit JSON `null` is not that. `json.Value.nil`
+                // spells both, so a ref has to be resolved through
+                // `resolveRef`, which reports a missing path as an
+                // error, instead of `resolveValue`, which folds it into
+                // `.nil` and makes the two indistinguishable. OPA binds
+                // a null and carries on: for `role := input.user.role;
+                // role != "admin"` with role explicitly null, `opa eval`
+                // returns true, and it returns false when role is
+                // absent. Both checked before writing this.
+                const bound = switch (a.value.*) {
+                    .ref => |path| resolveRef(input, scope, path) catch |err| switch (err) {
+                        error.PathNotFound, error.PathNotObject => return false,
+                        else => return err,
+                    },
+                    else => try resolveValue(a.value, input, scope, depth + 1),
                 };
-                if (bound == .nil) return false;
                 const child = Scope{ .parent = scope, .name = a.var_name, .bound = bound };
                 return evalBodyScoped(body[i + 1 ..], input, &child, depth + 1);
             },
@@ -560,6 +571,29 @@ test "assign: binds for the rest of the body" {
     // null: otherwise `x := input.missing` would compare equal to
     // another missing field and quietly hold.
     try testing.expect(!try evaluate(&arena, "{}", policy));
+}
+
+test "assign: an explicit null binds, a missing path does not" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // `json.Value.nil` spells both "absent" and a real JSON null, so
+    // treating the bound value as undefined when it is nil conflated
+    // them. Checked against `opa eval`: role explicitly null -> true,
+    // role absent -> false.
+    const policy =
+        \\{"type":"modules","modules":[{"type":"module","rules":[
+        \\  {"type":"rule","name":"allow","default":true,"value":{"type":"value","value":false}},
+        \\  {"type":"rule","name":"allow","body":[
+        \\    {"type":"assign","var":"role","value":{"type":"ref","path":["input","user","role"]}},
+        \\    {"type":"compare","op":"neq",
+        \\     "left":{"type":"ref","path":["role"]},
+        \\     "right":{"type":"value","value":"admin"}}]}]}]}
+    ;
+
+    try testing.expect(try evaluate(&arena, "{\"user\":{\"role\":null}}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"user\":{}}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"user\":{\"role\":\"admin\"}}", policy));
 }
 
 test "assign: binding a name twice in one body is rejected" {

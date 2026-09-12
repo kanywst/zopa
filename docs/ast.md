@@ -152,7 +152,7 @@ Reaching it takes defining `f()`, never calling it (the call site is refused as 
 
 `x := <expr>` in Rego. The binding is visible to every expression **after** it in the same body, which is what separates it from `some` / `every`: those own the single expression they bind over, an assignment scopes over its siblings.
 
-A binding whose value is undefined makes the body undefined, so the rule does not hold. Binding null instead would let `x := input.missing` compare equal to another missing field and quietly succeed.
+A binding whose value is *undefined* makes the body undefined, so the rule does not hold -- binding null instead would let `x := input.missing` compare equal to another missing field and quietly succeed. An explicit JSON `null` is a different thing and does bind: zopa spells both with `Value.nil` internally, but `role := input.user.role` where role is `null` binds and the body continues, matching OPA.
 
 A name may be bound **once per scope**. Binding it twice in one body is `error.DuplicateAssignment`, matching OPA, which refuses `x := 1; x := 2` at compile time with `rego_compile_error: var x assigned above`. The same name inside a nested `some` body is a different scope and is fine. A binding never escapes its own rule body.
 
