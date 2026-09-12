@@ -1,0 +1,11 @@
+{
+  "name":  "assign_null",
+  "note":  "An explicit JSON null binds; only an unresolved path is undefined. zopa spells both with Value.nil internally, so conflating them would deny a policy OPA allows. Verified against `opa eval`: role null -> true, role absent -> false.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if {\n\trole := input.user.role\n\trole != \"admin\"\n}\n",
+  "cases": [
+    { "input": { "user": { "role": null } },    "expected": 1 },
+    { "input": { "user": {} },                  "expected": 0 },
+    { "input": { "user": { "role": "admin" } }, "expected": 0 },
+    { "input": { "user": { "role": "guest" } }, "expected": 1 }
+  ]
+}

@@ -1174,6 +1174,19 @@ check(
 // `opa eval`. Pointless, but not false.
 check('assign: a trailing binding holds', decide({}, { type: "assign", var: "x", value: { type: "value", value: 1 } }), 1);
 
+// An explicit null binds; only an unresolved path is undefined.
+// `json.Value.nil` spells both, so conflating them would deny a policy
+// OPA allows -- checked against `opa eval`.
+const nullPolicy = { type: "modules", modules: [{ type: "module", rules: [
+  { type: "rule", name: "allow", default: true, value: { type: "value", value: false } },
+  { type: "rule", name: "allow", body: [
+    { type: "assign", var: "role", value: { type: "ref", path: ["input", "user", "role"] } },
+    { type: "compare", op: "neq", left: { type: "ref", path: ["role"] }, right: { type: "value", value: "admin" } },
+  ] },
+] }] };
+check('assign: an explicit null binds', decide({ user: { role: null } }, nullPolicy), 1);
+check('assign: a missing path does not bind', decide({ user: {} }, nullPolicy), 0);
+
 // Nested where there is no body to cover, it cannot mean anything.
 check(
   'assign: nested under not -> -1',

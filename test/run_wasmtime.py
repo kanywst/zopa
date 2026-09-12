@@ -1046,6 +1046,70 @@ check(
     decide({}, {"type": "not", "expr": {"type": "assign", "var": "x", "value": {"type": "value", "value": 1}}}),
     -1,
 )
+# Rego is single-assignment per scope; `opa check` refuses this while
+# `opa parse` accepts it, so the rejection is zopa's to make.
+check(
+    "assign: binding a name twice in one body -> -1",
+    decide(
+        {},
+        {
+            "type": "module",
+            "rules": [
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "body": [
+                        {"type": "assign", "var": "x", "value": {"type": "value", "value": 1}},
+                        {"type": "assign", "var": "x", "value": {"type": "value", "value": 2}},
+                    ],
+                }
+            ],
+        },
+    ),
+    -1,
+)
+# `allow if { x := 1 }` is true in OPA -- pointless, but not false.
+check(
+    "assign: a trailing binding holds",
+    decide({}, {"type": "assign", "var": "x", "value": {"type": "value", "value": 1}}),
+    1,
+)
+# An explicit null binds; only an unresolved path is undefined.
+null_policy = {
+    "type": "modules",
+    "modules": [
+        {
+            "type": "module",
+            "rules": [
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "default": True,
+                    "value": {"type": "value", "value": False},
+                },
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "body": [
+                        {
+                            "type": "assign",
+                            "var": "role",
+                            "value": {"type": "ref", "path": ["input", "user", "role"]},
+                        },
+                        {
+                            "type": "compare",
+                            "op": "neq",
+                            "left": {"type": "ref", "path": ["role"]},
+                            "right": {"type": "value", "value": "admin"},
+                        },
+                    ],
+                },
+            ],
+        }
+    ],
+}
+check("assign: an explicit null binds", decide({"user": {"role": None}}, null_policy), 1)
+check("assign: a missing path does not bind", decide({"user": {}}, null_policy), 0)
 
 if failed:
     print(f"\n{failed} test(s) failed", file=sys.stderr)
