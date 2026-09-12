@@ -67,6 +67,8 @@ Ratios, never absolute microseconds. A shared runner cannot measure a sub-micros
 
 The threshold is 1.5x, deliberately wide. It exists to catch something like a per-request policy parse creeping back into the compiled path, not to police a few percent of drift — a gate that cries wolf gets ignored, which is worse than not having one. Verified in both directions: three consecutive `--quick` runs against the committed baseline pass with the worst ratio at 0.66x, and reintroducing the per-request AST parse into `zopa-compiled` trips all 13 ratios, by up to 19.7x on `04_deep_nest`.
 
+The gate's own exit-code contract is tested — `node --test bench/compare.test.mjs`, also run in CI before the gate is trusted to gate anything. Pass, regressed, reference-engine-missing and nothing-overlapped are each asserted, because a later edit reopening the fail-open case is precisely the failure this design is guarding against.
+
 To re-seed after an intended change:
 
 ```bash
