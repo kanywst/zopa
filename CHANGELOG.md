@@ -4,6 +4,12 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-12
+
+**The module does not change.** `zopa-v0.4.1.wasm` is byte-for-byte `zopa-v0.4.0.wasm` (SHA-256 `d60e29fa1f26aa8037b05e66b1864435a6f1935c2dbfc8de510d5032f23e0082`); nothing under `src/` was touched. Everything here is the toolchain, the benchmark, and what a release ships alongside the wasm.
+
+**One thing will break, deliberately.** `tools/rego2ast.py` now refuses four Rego constructs it used to convert: `with`, partial rules, `else` branches, and function definitions. If your build starts failing on one of them, it was already producing an AST that answered a different question than your Rego -- see *Fixed* below. A patch rather than a minor because no deployed artifact changes and the refusals correct a wrong answer rather than remove a working feature, but it is a toolchain break and worth reading before upgrading.
+
 ### Fixed
 
 - **`rego2ast.py` silently changed what four constructs mean.** `with`, partial rules, `else` fallback branches and function definitions all converted with exit 0 while emitting an AST that answered a different question. `else` kept only the first branch, dropping the fallback -- an allow path or a deny path depending on which it was. A function definition became a rule whose parameter resolved against the input document instead of binding, so `f(x) if x == 1` silently became a test on `input.x`. Details on the first two: Both converted "successfully" into an AST that answered a different question than the Rego it came from. `allow if input.x == 1 with input.y as 2` produced exactly the AST of the same rule without the modifier -- OPA evaluates that body against a rewritten input, zopa against the original. Partial rules were flattened: `deny contains "x" if ...` became a plain boolean `deny` rule and `p[k] = v if ...` a complete rule with the key discarded, losing the collected set or object entirely and turning definitions OPA unions into definitions zopa reports as conflicting. The converter is documented to bail with `Unsupported` on Rego it cannot express, and the conformance runner records that as SKIP; these two slipped through as supported. Both now refuse. This is the same class of divergence the JSON parser is strict about -- a policy the two engines read differently -- arriving through the converter instead.
@@ -146,7 +152,8 @@ First tagged release. Public surface (export names, AST schema, callback semanti
 
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
-[Unreleased]: https://github.com/kanywst/zopa/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/kanywst/zopa/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/kanywst/zopa/releases/tag/v0.4.1
 [0.4.0]: https://github.com/kanywst/zopa/releases/tag/v0.4.0
 [0.3.1]: https://github.com/kanywst/zopa/releases/tag/v0.3.1
 [0.3.0]: https://github.com/kanywst/zopa/releases/tag/v0.3.0
