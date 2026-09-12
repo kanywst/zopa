@@ -55,11 +55,32 @@ npm i --no-save @cedar-policy/cedar-wasm
 
 Anything missing is **skipped and named**, and the run still reports whatever is available — so `zig build bench` does something useful on a machine that has never heard of either. Nothing is vendored and this repository still has no `package.json`: the OPA WASM ABI is bound directly in `engines/opa-wasm.mjs`, and Cedar resolves at run time or skips.
 
+## Regression gate
+
+`bench/results/baseline.json` records, for each fixture, the ratio of every engine's amortised cost to `zopa-compiled` **on the same run**. CI compares each PR's smoke run against it:
+
+```bash
+node bench/compare.mjs bench-smoke.json bench/results/baseline.json
+```
+
+Ratios, never absolute microseconds. A shared runner cannot measure a sub-microsecond p99 meaningfully, and storing its numbers as a baseline would mean re-seeding whenever the runner pool changed. A runner that is simply slow today scales every engine in the same process equally, so the ratios hold; a change that makes zopa's own evaluation slower moves them. That is the only cross-machine comparison this data honestly supports.
+
+The threshold is 1.5x, deliberately wide. It exists to catch something like a per-request policy parse creeping back into the compiled path, not to police a few percent of drift — a gate that cries wolf gets ignored, which is worse than not having one. Verified in both directions: three consecutive `--quick` runs against the committed baseline pass with the worst ratio at 0.66x, and reintroducing the per-request AST parse into `zopa-compiled` trips all 13 ratios, by up to 19.7x on `04_deep_nest`.
+
+To re-seed after an intended change:
+
+```bash
+zig build bench -- --json=run.json
+node bench/compare.mjs run.json > bench/results/baseline.json
+```
+
+Seed from a full run, never from `--quick`: 300 iterations is enough for the agreement gate but not for a number anything else is compared against.
+
 ## Metrics
 
 - **p50 / p95 / p99** per decision, from per-iteration samples, minus a measured clock-read floor.
 - **amort** — the same cost measured with no instrumentation inside the loop (a fixed time window divided by the count). Where `amort` sits well below `p50`, the clock reads around each iteration were most of what `p50` captured. Trust `amort` for the level and the percentiles for the shape of the tail; at the default iteration counts they converge, and in `--quick` mode they do not.
-- **ops/s** for a single sequential caller. For the in-process engines that is CPU-bound; for the sidecar it is bounded by the round trip, which is the point.
+- **ops/s** for a single sequential caller, taken as the **best of several short windows** rather than one long one. For the in-process engines that is CPU-bound; for the sidecar it is bounded by the round trip, which is the point. Best-of matters at these costs: a single window that catches a GC pause reports well below what the engine can do, and an early revision of this harness measured `zopa-compiled` at 3.84 µs amortised against a 1.38 µs p50 on the same run — interference, not the engine.
 - **mem KiB** after warm-up: WASM linear memory for the in-process engines, and for the sidecar the resident figure from OPA's own `/metrics` (read over HTTP rather than via `ps`, which needs permission to inspect another process and differs per platform).
 - **artifact KiB** — the deployed artifact. For zopa this is one module that serves every policy; for OPA WASM it is one module *per policy*.
 - **cold ms** — instantiate plus first decision. `opa build` is deliberately outside this: it is a build step, not a runtime one, so the compiled bundle is memoised and cold start measures what a deployment actually pays.
