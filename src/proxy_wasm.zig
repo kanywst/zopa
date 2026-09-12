@@ -160,6 +160,28 @@ var compiled_policy: ?ast.Modules = null;
 var has_allow_body: bool = false;
 var has_allow_response: bool = false;
 
+/// One `(package, rule)` pair a phase evaluates, and what a deny does.
+///
+/// Without a `targets` block the shim evaluates exactly one rule per
+/// phase in the implicit `""` package, which is what every release
+/// before this did and remains the default. A deployment that wants an
+/// audit rule alongside the enforcing one -- decided, logged, but not
+/// blocking -- names both here.
+const Target = struct {
+    package: []const u8,
+    rule: []const u8,
+    /// `false` for an audit target: the decision is logged and the
+    /// request proceeds. Enforcing is the default, so a typo in the
+    /// field name cannot silently turn a blocking rule advisory.
+    enforce: bool = true,
+};
+
+/// Targets per phase, in configuration order. Empty means the phase is
+/// not evaluated at all.
+var request_targets: []const Target = &.{};
+var body_targets: []const Target = &.{};
+var response_targets: []const Target = &.{};
+
 /// Whether the `allow_body` rules actually read the body. Set at
 /// configure time from `body_deps.analyzeTarget`; decides whether a
 /// truncated body is a problem.
@@ -232,8 +254,26 @@ fn compilePolicy(policy_bytes: []const u8) bool {
     // The AST aliases the policy bytes for every string, so the copy
     // has to live on the same arena as the nodes pointing into it.
     const policy = allocator.dupe(u8, policy_bytes) catch return false;
-    const ast_value = json.parse(allocator, policy) catch return false;
+    const config = json.parse(allocator, policy) catch return false;
+
+    // Two accepted shapes. Historically the whole configuration *is*
+    // the policy AST; a document carrying a `policy` key is the newer
+    // wrapper that can also name targets. No AST node has a top-level
+    // `policy` member, so the two cannot be confused.
+    const wrapped = config == .object and json.lookupMember(config.object, "policy") != null;
+    const ast_value = if (wrapped) json.lookupMember(config.object, "policy").? else config;
+
     const bundle = ast.buildModulesBundle(allocator, ast_value) catch return false;
+
+    const targets = buildTargets(allocator, bundle, if (wrapped) config else null) catch |err| {
+        switch (err) {
+            error.UnknownPhase => logMsg(log_level_error, "zopa: target names an unknown phase"),
+            error.UnknownOnDeny => logMsg(log_level_error, "zopa: target has an unknown on_deny"),
+            error.TargetRuleMissing => logMsg(log_level_error, "zopa: target names a rule the policy does not define"),
+            else => logMsg(log_level_error, "zopa: targets block is malformed"),
+        }
+        return false;
+    };
 
     var body_rules = false;
     var response_rules = false;
@@ -243,21 +283,156 @@ fn compilePolicy(policy_bytes: []const u8) bool {
             if (std.mem.eql(u8, rule.name, response_target_rule)) response_rules = true;
         }
     }
+    // An explicit targets block decides which phases run; the scan above
+    // only governs the default arrangement.
+    if (wrapped) {
+        body_rules = targets.body.len > 0;
+        response_rules = targets.response.len > 0;
+    }
 
     if (policy_arena) |*old| old.deinit();
     policy_arena = arena;
     adopted = true;
     compiled_policy = bundle;
+    request_targets = targets.request;
+    body_targets = targets.body;
+    response_targets = targets.response;
     has_allow_body = body_rules;
     has_allow_response = response_rules;
     // Scoped to the package the phase callbacks dispatch into, which
     // is the implicit `""` -- see `decide`.
-    body_class = if (body_rules)
-        body_deps.analyzeTarget(bundle, "", body_target_rule).class
-    else
-        .no_body_refs;
+    // Across every body target, not just the default rule: the shim
+    // refuses a truncated body if *any* rule it will evaluate reads it,
+    // and taking the first would let a second target read the body
+    // unprotected.
+    body_class = .no_body_refs;
+    for (targets.body) |t| {
+        const class = body_deps.analyzeTarget(bundle, t.package, t.rule).class;
+        body_class = switch (class) {
+            .full_tree => .full_tree,
+            .prefix_only => if (body_class == .full_tree) .full_tree else .prefix_only,
+            .no_body_refs => body_class,
+        };
+    }
 
     return true;
+}
+
+const TargetSet = struct {
+    request: []const Target,
+    body: []const Target,
+    response: []const Target,
+};
+
+const TargetError = error{
+    UnknownPhase,
+    UnknownOnDeny,
+    TargetRuleMissing,
+    MalformedTargets,
+    OutOfMemory,
+};
+
+/// Build the per-phase target lists.
+///
+/// `config` is null for the historical shape, where the configuration
+/// is the bare policy: one enforcing rule per phase in the implicit
+/// package, and the body and response phases only if the policy defines
+/// their rule. That arrangement is what every release before this one
+/// did, and staying byte-identical to it matters more than tidiness.
+///
+/// Everything the block can get wrong fails configure rather than
+/// degrading: an unknown phase, an unknown `on_deny`, a rule the policy
+/// does not define. A target that never fires is worse than a filter
+/// that refuses to start, because nothing surfaces it.
+fn buildTargets(
+    allocator: std.mem.Allocator,
+    bundle: ast.Modules,
+    config: ?json.Value,
+) TargetError!TargetSet {
+    const cfg = config orelse return defaultTargets(allocator, bundle);
+
+    const targets_v = json.lookupMember(cfg.object, "targets") orelse
+        return defaultTargets(allocator, bundle);
+    if (targets_v != .array) return error.MalformedTargets;
+
+    var request: std.ArrayList(Target) = .empty;
+    var body: std.ArrayList(Target) = .empty;
+    var response: std.ArrayList(Target) = .empty;
+
+    for (targets_v.array) |entry| {
+        if (entry != .object) return error.MalformedTargets;
+        const obj = entry.object;
+
+        const phase_v = json.lookupMember(obj, "phase") orelse return error.MalformedTargets;
+        const rule_v = json.lookupMember(obj, "rule") orelse return error.MalformedTargets;
+        if (phase_v != .string or rule_v != .string) return error.MalformedTargets;
+
+        const package = if (json.lookupMember(obj, "package")) |p| blk: {
+            if (p != .string) return error.MalformedTargets;
+            break :blk p.string;
+        } else "";
+
+        // Enforcing unless the deployment says otherwise, so a
+        // misspelled field cannot quietly make a blocking rule
+        // advisory.
+        const enforce = if (json.lookupMember(obj, "on_deny")) |od| blk: {
+            if (od != .string) return error.MalformedTargets;
+            if (std.mem.eql(u8, od.string, "deny")) break :blk true;
+            if (std.mem.eql(u8, od.string, "log")) break :blk false;
+            return error.UnknownOnDeny;
+        } else true;
+
+        if (!ruleExists(bundle, package, rule_v.string)) return error.TargetRuleMissing;
+
+        const target = Target{ .package = package, .rule = rule_v.string, .enforce = enforce };
+        const list = if (std.mem.eql(u8, phase_v.string, "request"))
+            &request
+        else if (std.mem.eql(u8, phase_v.string, "body"))
+            &body
+        else if (std.mem.eql(u8, phase_v.string, "response"))
+            &response
+        else
+            return error.UnknownPhase;
+        try list.append(allocator, target);
+    }
+
+    return .{
+        .request = try request.toOwnedSlice(allocator),
+        .body = try body.toOwnedSlice(allocator),
+        .response = try response.toOwnedSlice(allocator),
+    };
+}
+
+/// The arrangement every release before targets used.
+fn defaultTargets(allocator: std.mem.Allocator, bundle: ast.Modules) TargetError!TargetSet {
+    const request = try allocator.alloc(Target, 1);
+    request[0] = .{ .package = "", .rule = request_target_rule };
+
+    var body: []Target = &.{};
+    if (ruleExists(bundle, "", body_target_rule)) {
+        const buf = try allocator.alloc(Target, 1);
+        buf[0] = .{ .package = "", .rule = body_target_rule };
+        body = buf;
+    }
+
+    var response: []Target = &.{};
+    if (ruleExists(bundle, "", response_target_rule)) {
+        const buf = try allocator.alloc(Target, 1);
+        buf[0] = .{ .package = "", .rule = response_target_rule };
+        response = buf;
+    }
+
+    return .{ .request = request, .body = body, .response = response };
+}
+
+fn ruleExists(bundle: ast.Modules, package: []const u8, rule: []const u8) bool {
+    for (bundle.modules) |module| {
+        if (!std.mem.eql(u8, module.package, package)) continue;
+        for (module.rules) |r| {
+            if (std.mem.eql(u8, r.name, rule)) return true;
+        }
+    }
+    return false;
 }
 
 export fn proxy_on_context_create(_: i32, _: i32) void {}
@@ -411,7 +586,7 @@ fn evaluateRequest(policy: ast.Modules) bool {
         headers,
     ) catch return false;
 
-    return decide(arena, input, policy, request_target_rule);
+    return decideTargets(arena, input, policy, request_targets);
 }
 
 fn evaluateBody(policy: ast.Modules, body_size: usize, truncated: bool) bool {
@@ -433,7 +608,7 @@ fn evaluateBody(policy: ast.Modules, body_size: usize, truncated: bool) bool {
     };
     const input = wire.buildBodyInput(allocator, body, truncated) catch return false;
 
-    return decide(arena, input, policy, body_target_rule);
+    return decideTargets(arena, input, policy, body_targets);
 }
 
 fn evaluateResponse(policy: ast.Modules) bool {
@@ -449,13 +624,54 @@ fn evaluateResponse(policy: ast.Modules) bool {
 
     const input = wire.buildResponseInput(allocator, status orelse "", headers) catch return false;
 
-    return decide(arena, input, policy, response_target_rule);
+    return decideTargets(arena, input, policy, response_targets);
 }
 
 /// Every phase dispatches into the implicit `""` package: a
 /// proxy-wasm filter carries one policy and selects the rule by phase,
 /// not by package. Multi-package addressing is a host-driven feature
 /// and goes through the `evaluate_addressed` export instead.
+/// Evaluate every target for a phase and combine them.
+///
+/// Enforcing targets are ANDed: with more than one, all must allow.
+/// That is the only safe composition -- ORing would let an added rule
+/// widen access, so a deployment that adds a second enforcing target
+/// can only ever narrow it.
+///
+/// A non-enforcing target is evaluated and logged, never blocking. It
+/// exists so an audit rule can ride along with the decision it is
+/// auditing, on the same input, without becoming a way to fail a
+/// request. Its errors do not deny either: an advisory rule that cannot
+/// evaluate is a broken audit trail, not a reason to reject traffic.
+///
+/// No targets at all means the phase does not run, which the callers
+/// already gate on.
+fn decideTargets(
+    arena: *std.heap.ArenaAllocator,
+    input: []const u8,
+    policy: ast.Modules,
+    targets: []const Target,
+) bool {
+    var allowed = true;
+    for (targets) |t| {
+        const result = eval.evaluateCompiled(arena, input, policy, t.package, t.rule) catch {
+            if (t.enforce) {
+                logMsg(log_level_warn, "zopa: enforcing target failed to evaluate; denying");
+                return false;
+            }
+            logMsg(log_level_warn, "zopa: audit target failed to evaluate; continuing");
+            continue;
+        };
+        if (result) continue;
+        if (t.enforce) {
+            allowed = false;
+        } else {
+            logMsg(log_level_warn, "zopa: audit target denied; not enforcing");
+        }
+    }
+    return allowed;
+}
+
 fn decide(
     arena: *std.heap.ArenaAllocator,
     input: []const u8,

@@ -81,6 +81,43 @@ Handles are not pointers, and are validated on every use. A stale, doubled, zero
 
 A bare table index would not be enough for that. Slots are reused, so releasing a handle and compiling again would reissue the same number for a different policy, and a caller still holding the old one would get an authoritative-looking decision from the wrong policy rather than a denial. A handle therefore packs a slot index in its low 16 bits and the generation that slot was on when the handle was issued in the bits above; `lookup` checks both. A slot whose generation is exhausted is retired rather than wrapped, and `policy_compile` returns `-1` once the table is full, because wrapping is exactly the reuse the scheme exists to prevent.
 
+## Plugin configuration
+
+Two accepted shapes. Historically the whole configuration *is* the policy AST, and that still works unchanged:
+
+```json
+{ "type": "module", "rules": [ ... ] }
+```
+
+A document carrying a `policy` key is the wrapper form, which can also name targets. No AST node has a top-level `policy` member, so the two cannot be confused:
+
+```json
+{
+  "policy": { "type": "modules", "modules": [ ... ] },
+  "targets": [
+    { "phase": "request", "package": "authz", "rule": "allow" },
+    { "phase": "request", "package": "audit", "rule": "ok", "on_deny": "log" }
+  ]
+}
+```
+
+| Field | Meaning |
+| --------- | ------------------------------------------------------------------------ |
+| `phase` | `request`, `body`, or `response`. Anything else fails configure. |
+| `package` | Defaults to `""`, the implicit package. |
+| `rule` | The rule name. It must exist in that package or configure fails. |
+| `on_deny` | `deny` (default) enforces; `log` records the decision and lets it through. |
+
+Without a `targets` block the shim behaves exactly as every release before this one: `allow` on the request phase, plus `allow_body` and `allow_response` if the policy defines them, all enforcing, all in the implicit package.
+
+**Composition is AND.** With more than one enforcing target on a phase, all must allow. ORing would let an added rule widen access, so adding an enforcing target can only ever narrow it.
+
+**An advisory target never blocks.** It is evaluated against the same input and its deny is logged. Its *errors* do not deny either: a broken audit rule is a broken audit trail, not a reason to reject traffic. That is the one place the shim deliberately does not fail closed, and it is why `deny` is the default -- a misspelled `on_deny` field cannot quietly turn a blocking rule advisory.
+
+**Everything a targets block can get wrong fails configure**: an unknown phase, an unknown `on_deny`, a rule the policy does not define, a malformed entry. A target that never fires is worse than a filter that refuses to start, because nothing surfaces it.
+
+A truncated request body is refused if *any* body target reads the body, not just the first -- otherwise a second target could read it unprotected.
+
 ## Imports
 
 The host must provide all of these. zopa does not feature-test -- unresolved imports cause module instantiation to fail.

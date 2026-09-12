@@ -6,6 +6,20 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ### Added
 
+- **`targets[]` in the proxy-wasm plugin configuration.** A deployment can now name which `(package, rule)` pairs each phase evaluates, and whether a deny enforces or is only recorded -- the audit-alongside-enforcement case `docs/proposals/multiple-policies.md` was written for, and the last of that proposal's goals.
+
+  The configuration accepts a `{"policy": ..., "targets": [...]}` wrapper alongside the historical bare-AST form. No AST node has a top-level `policy` member, so the two cannot be confused, and without a `targets` block the shim behaves exactly as every release before it.
+
+  Enforcing targets are **ANDed**: with more than one, all must allow. ORing would let an added rule widen access. An advisory target (`"on_deny": "log"`) is evaluated on the same input and never blocks, and its errors do not deny either -- a broken audit rule is a broken audit trail, not a reason to reject traffic. That is the one place the shim deliberately does not fail closed, which is why `deny` is the default: a misspelled field cannot quietly make a blocking rule advisory.
+
+  Everything the block can get wrong fails configure -- unknown phase, unknown `on_deny`, a rule the policy does not define, a malformed entry -- because a target that never fires is worse than a filter that refuses to start. A truncated body is refused if *any* body target reads the body, not just the first. Release build: ~68 KB.
+
+### Fixed
+
+- **The Envoy suite could test the wrong process.** Scenario 2 never stopped its Envoy, and `start_envoy` waits on the admin port, which a stale Envoy answers as happily as a fresh one -- so a scenario whose instance failed to bind silently ran against the previous one's policy. It cost me two checks that "passed" against the wrong filter and two that failed for an unrelated reason. The suite now stops each scenario's Envoy and refuses to start when either port is already held.
+
+### Added
+
 - **`:=` assignment in a rule body.** `role := input.user.role` binds a name visible to every expression after it in the same body -- the last of the two Rego idioms the coverage table named as practically missing. `zig build test-coverage` goes 34/49 to 36/51.
 
   Bodies are now evaluated recursively rather than as a flat loop, because an assignment scopes over its **siblings** where `some` and `every` own the single expression they bind over. That distinction is why the scope chain existed for four releases without needing this.
