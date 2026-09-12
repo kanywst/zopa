@@ -267,6 +267,48 @@ test "analyze: keys that merely start with `body` are not body refs" {
     try testing.expectEqual(Class.no_body_refs, try classify(policy));
 }
 
+test "analyze: an index into the body is still a body ref" {
+    // `input.body[0]` reads the parsed body, so a truncated body must
+    // still be refused. Missing this would be the fail-open this
+    // analyser exists to prevent, reached through a segment kind that
+    // did not exist when it was written.
+    const indexed =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",0]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":1}}";
+    try testing.expectEqual(Class.prefix_only, try classify(indexed));
+
+    // Indexing body_raw cannot resolve -- it is a string -- but
+    // classifying it as needing the whole body is the safe direction
+    // and matches the un-indexed spelling.
+    const raw_indexed =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body_raw\",0]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":1}}";
+    try testing.expectEqual(Class.full_tree, try classify(raw_indexed));
+}
+
+test "analyze: a path opening with an index reaches no body" {
+    // `rego2ast.py` cannot emit this -- `input` is an object -- but a
+    // hand-authored AST can, and the classifier has to be right about
+    // it on its own rather than by trusting the converter. An index
+    // into the input root never resolves, so the ref reads nothing,
+    // and `isKey` returning false for `.index` is what makes that fall
+    // through to `.none` instead of matching `body` at the wrong depth.
+    const leading_index =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",0,\"body\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":1}}";
+    try testing.expectEqual(Class.no_body_refs, try classify(leading_index));
+
+    // Same without the `input` prefix, which `classifyRef` strips.
+    const bare_index =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[0,\"body\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":1}}";
+    try testing.expectEqual(Class.no_body_refs, try classify(bare_index));
+}
+
 test "analyzeTarget: only the named rule's body refs count" {
     // `allow` reads the body; `allow_body` doesn't. Asking about
     // `allow_body` must not inherit `allow`'s dependency, or every
