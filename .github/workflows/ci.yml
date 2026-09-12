@@ -75,9 +75,20 @@ jobs:
       # times zopa, which would silently stop exercising the agreement
       # gate -- the part of this job worth running on every PR.
       - name: install opa
+        env:
+          OPA_VERSION: "1.16.1"
+          # Published as opa_linux_amd64_static.sha256 on the upstream
+          # release. Verified before the binary is made executable: this
+          # job downloads a binary and runs it, so an unverified fetch is
+          # arbitrary code execution in CI on whatever the CDN serves.
+          # Same pattern the envoy job already uses.
+          OPA_SHA256: "dc00b1c32c52f1557f7f127940bc3f1de6c507fdfbe0446f19d3b19ca5786494"
         run: |
-          curl -L -o /usr/local/bin/opa https://openpolicyagent.org/downloads/v1.16.1/opa_linux_amd64_static
-          chmod +x /usr/local/bin/opa
+          set -euo pipefail
+          url="https://openpolicyagent.org/downloads/v${OPA_VERSION}/opa_linux_amd64_static"
+          curl -fsSL -o /tmp/opa "$url"
+          echo "${OPA_SHA256}  /tmp/opa" | sha256sum -c -
+          sudo install -m 0755 /tmp/opa /usr/local/bin/opa
           opa version
 
       # Smoke counts, not real numbers: a shared runner cannot measure a
@@ -85,9 +96,7 @@ jobs:
       # builds, runs, and agrees. Publishable numbers come from `zig build
       # bench` on a quiet machine.
       - name: bench (smoke)
-        run: |
-          zig build --release=small
-          node bench/run.mjs --quick --json=bench-smoke.json
+        run: zig build bench -- --quick --json=bench-smoke.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -191,9 +200,20 @@ jobs:
           cache-dependency-path: test/requirements.txt
 
       - name: install opa
+        env:
+          OPA_VERSION: "1.16.1"
+          # Published as opa_linux_amd64_static.sha256 on the upstream
+          # release. Verified before the binary is made executable: this
+          # job downloads a binary and runs it, so an unverified fetch is
+          # arbitrary code execution in CI on whatever the CDN serves.
+          # Same pattern the envoy job already uses.
+          OPA_SHA256: "dc00b1c32c52f1557f7f127940bc3f1de6c507fdfbe0446f19d3b19ca5786494"
         run: |
-          curl -L -o /usr/local/bin/opa https://openpolicyagent.org/downloads/v1.16.1/opa_linux_amd64_static
-          chmod +x /usr/local/bin/opa
+          set -euo pipefail
+          url="https://openpolicyagent.org/downloads/v${OPA_VERSION}/opa_linux_amd64_static"
+          curl -fsSL -o /tmp/opa "$url"
+          echo "${OPA_SHA256}  /tmp/opa" | sha256sum -c -
+          sudo install -m 0755 /tmp/opa /usr/local/bin/opa
           opa version
 
       - name: install python deps
