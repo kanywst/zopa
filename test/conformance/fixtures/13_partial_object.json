@@ -1,0 +1,15 @@
+{
+  "name": "partial_object",
+  "note": "The object spelling of the same problem, and the one the first fix missed: its head carries both a key and a value, so a guard testing for a missing value skipped it and the key was silently discarded.",
+  "rego": "package authz\n\nroles[input.user] = input.role if input.x == 1\n",
+  "cases": [
+    {
+      "input": {
+        "x": 1,
+        "user": "alice",
+        "role": "admin"
+      },
+      "expected": 1
+    }
+  ]
+}
