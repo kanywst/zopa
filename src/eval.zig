@@ -402,8 +402,14 @@ fn resolveRef(
 ) HelperError!json.Value {
     if (path.len == 0) return error.PathNotFound;
 
+    // `walkValue` rather than a path helper in `json.zig`: it already
+    // walks both segment kinds for bound values, and reusing it means
+    // no intermediate buffer and so no cap on how long a path may be.
+    // An earlier revision copied segments into a stack array sized by
+    // `max_eval_depth`, which quietly imposed the expression-recursion
+    // budget on ref length -- two unrelated limits sharing one constant.
     if (path[0].isKey("input")) {
-        return lookupSegments(input, path);
+        return walkValue(input, path[1..]);
     }
 
     // Only a name can match a binding. A path opening with an index has
@@ -416,26 +422,9 @@ fn resolveRef(
         }
     }
 
-    // No matching binding -- treat as a plain input ref.
-    return lookupSegments(input, path);
-}
-
-/// Bridge `ast.Expr.PathSegment` to the shape `json.zig` walks. The two
-/// are deliberately separate types so the parser never imports the AST;
-/// this is the one place that has to know both.
-fn lookupSegments(root: json.Value, path: []const ast.Expr.PathSegment) HelperError!json.Value {
-    var buf: [max_eval_depth]json.Segment = undefined;
-    // A path longer than the recursion cap is refused rather than
-    // silently truncated: a truncated path resolves to a *different*
-    // value, which is a wrong decision rather than a refused one.
-    if (path.len > buf.len) return error.EvalTooDeep;
-    for (path, 0..) |seg, i| {
-        buf[i] = switch (seg) {
-            .key => |k| .{ .key = k },
-            .index => |n| .{ .index = n },
-        };
-    }
-    return json.lookupSegments(root, buf[0..path.len]);
+    // No matching binding -- treat as a plain input ref. The leading
+    // segment is not `input`, so there is nothing to strip.
+    return walkValue(input, path);
 }
 
 /// Walk `path` through `value`. Returns the leaf as-is; the only
@@ -511,6 +500,41 @@ test "ref: an index is not the string key that spells it" {
     try testing.expect(try evaluate(&arena, object_input, by_key));
     try testing.expect(try evaluate(&arena, array_input, by_index));
     try testing.expect(!try evaluate(&arena, array_input, by_key));
+}
+
+test "ref: a long plain-key path is not capped by the recursion budget" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Ref length and expression-recursion depth are unrelated budgets.
+    // An earlier revision walked paths through a stack buffer sized by
+    // `max_eval_depth`, which silently made any ref deeper than 32
+    // segments deny -- safe in direction, wrong in kind. 40 segments,
+    // comfortably past that cap.
+    const depth = 40;
+
+    var path: std.ArrayList(u8) = .empty;
+    defer path.deinit(allocator);
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(allocator);
+
+    try path.appendSlice(allocator, "\"input\"");
+    for (0..depth) |_| {
+        try path.appendSlice(allocator, ",\"a\"");
+        try input.appendSlice(allocator, "{\"a\":");
+    }
+    try input.appendSlice(allocator, "\"deep\"");
+    for (0..depth) |_| try input.append(allocator, '}');
+
+    const policy = try std.fmt.allocPrint(
+        allocator,
+        "{{\"type\":\"compare\",\"op\":\"eq\",\"left\":{{\"type\":\"ref\",\"path\":[{s}]}}," ++
+            "\"right\":{{\"type\":\"value\",\"value\":\"deep\"}}}}",
+        .{path.items},
+    );
+
+    try testing.expect(try evaluate(&arena, input.items, policy));
 }
 
 test "ref: an index walks a value bound by some/every, not just the input root" {

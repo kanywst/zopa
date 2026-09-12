@@ -10,7 +10,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
   The two kinds of segment stay distinct end to end. Indexing `{"groups": {"1": {...}}}` does **not** resolve, and looking up the key `"1"` does not index an array. Collapsing them -- encoding an index as the string `"0"` -- would let a supplied object stand in for the array a policy meant to index, which is a policy bypass rather than a convenience. Both directions are asserted in the unit tests, both host suites, and a conformance fixture.
 
-  A negative, fractional, or non-numeric index is rejected when the AST is built rather than resolving to undefined on every request: a malformed policy should fail at configure time, not become a silent permanent deny. Release build: ~63 KB, up 434 bytes.
+  A negative, fractional, or non-numeric index is rejected when the AST is built rather than resolving to undefined on every request: a malformed policy should fail at configure time, not become a silent permanent deny. Release build: ~63 KB, up 6 bytes -- the evaluator reuses the walker it already had for bound values rather than materialising the path.
 
 ## [0.4.1] - 2026-09-12
 
