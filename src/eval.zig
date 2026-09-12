@@ -237,11 +237,30 @@ fn evalBodyScoped(
                 // returns true, and it returns false when role is
                 // absent. Both checked before writing this.
                 const bound = switch (a.value.*) {
+                    // A literal is the only right-hand side that can
+                    // legitimately be null, so it is the only one where
+                    // `.nil` is a value rather than "did not resolve".
+                    .value => |v| v,
+
+                    // A ref reports a missing path as an error, unlike
+                    // `resolveValue`, which folds it into `.nil`.
                     .ref => |path| resolveRef(input, scope, path) catch |err| switch (err) {
                         error.PathNotFound, error.PathNotObject => return false,
                         else => return err,
                     },
-                    else => try resolveValue(a.value, input, scope, depth + 1),
+
+                    // Everything else -- a builtin call, a comparison, an
+                    // iterator -- returns `.nil` only when it could not
+                    // compute an answer. `count(input.missing)` yields
+                    // nil, and binding that would make `n != 0` hold
+                    // where OPA leaves the body undefined and denies.
+                    // Checked against `opa eval` with items absent:
+                    // OPA false, zopa was returning allow.
+                    else => blk: {
+                        const v = try resolveValue(a.value, input, scope, depth + 1);
+                        if (v == .nil) return false;
+                        break :blk v;
+                    },
                 };
                 const child = Scope{ .parent = scope, .name = a.var_name, .bound = bound };
                 return evalBodyScoped(body[i + 1 ..], input, &child, depth + 1);
@@ -594,6 +613,45 @@ test "assign: an explicit null binds, a missing path does not" {
     try testing.expect(try evaluate(&arena, "{\"user\":{\"role\":null}}", policy));
     try testing.expect(!try evaluate(&arena, "{\"user\":{}}", policy));
     try testing.expect(!try evaluate(&arena, "{\"user\":{\"role\":\"admin\"}}", policy));
+}
+
+test "assign: a call that could not compute leaves the body undefined" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // `count(input.items)` with items absent yields nil -- builtins use
+    // nil for "could not compute", never as a value. Binding it would
+    // make `n != 0` hold. Checked against `opa eval`: [1,2] true, []
+    // false, {} false. zopa returned allow for the last one.
+    const policy =
+        \\{"type":"modules","modules":[{"type":"module","rules":[
+        \\  {"type":"rule","name":"allow","default":true,"value":{"type":"value","value":false}},
+        \\  {"type":"rule","name":"allow","body":[
+        \\    {"type":"assign","var":"n","value":{"type":"call","name":"count",
+        \\     "args":[{"type":"ref","path":["input","items"]}]}},
+        \\    {"type":"compare","op":"neq",
+        \\     "left":{"type":"ref","path":["n"]},
+        \\     "right":{"type":"value","value":0}}]}]}]}
+    ;
+
+    try testing.expect(try evaluate(&arena, "{\"items\":[1,2]}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"items\":[]}", policy));
+    try testing.expect(!try evaluate(&arena, "{}", policy));
+}
+
+test "assign: a literal null is still a value, not a failure to compute" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // The one right-hand side where nil means null: a literal.
+    const policy =
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","body":[
+        \\  {"type":"assign","var":"x","value":{"type":"value","value":null}},
+        \\  {"type":"compare","op":"eq",
+        \\   "left":{"type":"ref","path":["x"]},
+        \\   "right":{"type":"value","value":null}}]}]}
+    ;
+    try testing.expect(try evaluate(&arena, "{}", policy));
 }
 
 test "assign: binding a name twice in one body is rejected" {

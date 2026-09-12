@@ -1108,6 +1108,49 @@ null_policy = {
         }
     ],
 }
+call_policy = {
+    "type": "modules",
+    "modules": [
+        {
+            "type": "module",
+            "rules": [
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "default": True,
+                    "value": {"type": "value", "value": False},
+                },
+                {
+                    "type": "rule",
+                    "name": "allow",
+                    "body": [
+                        {
+                            "type": "assign",
+                            "var": "n",
+                            "value": {
+                                "type": "call",
+                                "name": "count",
+                                "args": [{"type": "ref", "path": ["input", "items"]}],
+                            },
+                        },
+                        {
+                            "type": "compare",
+                            "op": "neq",
+                            "left": {"type": "ref", "path": ["n"]},
+                            "right": {"type": "value", "value": 0},
+                        },
+                    ],
+                },
+            ],
+        }
+    ],
+}
+# A builtin that could not compute yields nil, meaning "no answer"
+# rather than a value; binding it would make `n != 0` hold where OPA
+# denies.
+check("assign: a call that computed binds", decide({"items": [1, 2]}, call_policy), 1)
+check("assign: a call that could not compute denies", decide({}, call_policy), 0)
+
 check("assign: an explicit null binds", decide({"user": {"role": None}}, null_policy), 1)
 check("assign: a missing path does not bind", decide({"user": {}}, null_policy), 0)
 

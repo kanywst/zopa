@@ -1187,6 +1187,20 @@ const nullPolicy = { type: "modules", modules: [{ type: "module", rules: [
 check('assign: an explicit null binds', decide({ user: { role: null } }, nullPolicy), 1);
 check('assign: a missing path does not bind', decide({ user: {} }, nullPolicy), 0);
 
+// A builtin that could not compute yields nil, which means "no answer"
+// rather than a value -- binding it would make `n != 0` hold where OPA
+// denies. Checked against `opa eval`.
+const callPolicy = { type: "modules", modules: [{ type: "module", rules: [
+  { type: "rule", name: "allow", default: true, value: { type: "value", value: false } },
+  { type: "rule", name: "allow", body: [
+    { type: "assign", var: "n", value: { type: "call", name: "count", args: [{ type: "ref", path: ["input", "items"] }] } },
+    { type: "compare", op: "neq", left: { type: "ref", path: ["n"] }, right: { type: "value", value: 0 } },
+  ] },
+] }] };
+check('assign: a call that computed binds', decide({ items: [1, 2] }, callPolicy), 1);
+check('assign: a call that computed zero still binds', decide({ items: [] }, callPolicy), 0);
+check('assign: a call that could not compute denies', decide({}, callPolicy), 0);
+
 // Nested where there is no body to cover, it cannot mean anything.
 check(
   'assign: nested under not -> -1',
