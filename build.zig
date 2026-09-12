@@ -134,6 +134,22 @@ pub fn build(b: *std.Build) void {
     );
     bench_step.dependOn(&bench_run.step);
 
+    // `zig build test-coverage` -> which Rego constructs rego2ast can
+    // convert at all, checked against the recorded table. Separate from
+    // `test-conformance`, which asks whether the ones that do convert
+    // produce the right decision. Needs an `opa` CLI but no venv.
+    const coverage_run = b.addSystemCommand(&.{
+        "python3",
+        "test/conformance/coverage.py",
+        "--check",
+        "test/conformance/coverage.json",
+    });
+    const test_coverage_step = b.step(
+        "test-coverage",
+        "Check which Rego constructs rego2ast converts against the recorded table",
+    );
+    test_coverage_step.dependOn(&coverage_run.step);
+
     // `zig build test-conformance` -> rego (via `opa parse` +
     // tools/rego2ast.py) is fed through zopa.wasm and decisions are
     // compared to fixture expectations. Needs the project venv plus

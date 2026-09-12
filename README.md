@@ -10,7 +10,7 @@ Tiny, zero-allocation authorization engine for proxy-wasm and the edge. ~60 KB. 
 
 Hosts hand it a request input and a policy AST, both as JSON; zopa returns allow, deny, or error. It runs as a [proxy-wasm][pw] filter in Envoy or any other proxy-wasm 0.2.1 host, and the same binary works as a plain `WebAssembly.Module` for hosts that just want to call `evaluate(input, ast)`.
 
-**Status: alpha.** The AST covers a useful subset of Rego, and CI runs the suite under three wasm hosts (Node, wasmtime, and a real Envoy). Export names, AST schema, and callback semantics will change before 1.0.
+**Status: alpha.** The AST covers a subset of Rego -- **32 of the 45 constructs** probed by `zig build test-coverage`, with the gaps named rather than described as "useful" (see [Rego coverage](#rego-coverage)). CI runs the suite under three wasm hosts (Node, wasmtime, and a real Envoy). Export names, AST schema, and callback semantics will change before 1.0.
 
 [pw]: https://github.com/proxy-wasm/spec
 
@@ -98,6 +98,25 @@ What those say:
 - **zopa holds more WASM memory than OPA's module does** -- ~1.4 MB against 128 KB. The arena is reset with `.retain_capacity`, trading a steady-state floor for never calling `memory.grow` again. A smaller binary does not imply a smaller runtime footprint.
 
 Every row is reproducible from a clean checkout, but the machine is a developer laptop: treat the ratios as the signal and re-run `zig build bench` on your own hardware before quoting an absolute number. Full method, and what is deliberately not measured, in [`bench/README.md`](bench/README.md).
+
+## Rego coverage
+
+`tools/rego2ast.py` converts `opa parse --format json` output into zopa's AST, and refuses -- loudly -- anything it cannot express. `zig build test-coverage` walks a corpus of one-construct policies and records what converts, so this is a table rather than an adjective. Currently **32 of 45**. What is missing:
+
+| Not supported | Why it matters |
+| --- | --- |
+| `x := input.y` assignment in a body | Common idiom; you have to inline the reference instead. |
+| `input.xs[0]` array index | String keys work, numeric ones do not. |
+| standalone `some x in xs` | zopa's `some` binds over its own body, so the declaration cannot be lifted out of it. |
+| `every x in xs { a; b }` multi-expression body | Single-expression bodies convert. |
+| `in` membership operator | Write it as a `some` over the collection. |
+| `sprintf`, `lower`, `split`, and every builtin outside the four | Only `startswith`, `endswith`, `contains`, `count` exist. |
+| array and set comprehensions | No comprehension support at all. |
+| user-defined functions | Inline the body. |
+| `with input.y as ...` | It would change the input the body sees, and zopa has no equivalent. |
+| partial rules (`deny contains msg if ...`) | zopa rules are complete: one name, one value. |
+
+The last two are worth reading twice if you have used zopa before v0.4.1: the converter **silently dropped** them, emitting an AST that answered a different question than the Rego it came from. They now refuse. Converting is not the same as deciding correctly -- `zig build test-conformance` covers that, driving real `opa parse` output through the module and comparing decisions.
 
 ## Why zopa
 

@@ -259,3 +259,10 @@ jobs:
 
       - name: zig build test-conformance
         run: zig build test-conformance
+
+      # Which constructs convert at all, against the recorded table.
+      # test-conformance answers whether the ones that do convert decide
+      # correctly; this answers what the converter reaches, so a
+      # construct quietly starting or stopping shows up as a diff.
+      - name: zig build test-coverage
+        run: zig build test-coverage
