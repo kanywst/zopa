@@ -84,12 +84,25 @@ if [ "$components" != "0" ]; then
     exit 1
 fi
 
-# Checked against the licence file rather than trusted from the jq
-# above: a literal alone would keep claiming Apache-2.0 in a signed
-# document after a licence change.
+# The SBOM's licence id is set by the jq above, so reading it back and
+# comparing it to the same literal proves nothing -- it is true by
+# construction. What has to be checked is the file it claims to
+# describe, and a substring match on "Apache License" would accept
+# "Apache License, Version 1.1" just as happily.
+#
+# So: the digest of the canonical Apache License 2.0. LICENSE was
+# restored to it byte-for-byte in v0.4.1 after three years of shipping a
+# paraphrase, and this keeps that true -- an edited LICENSE fails the
+# release rather than being described as Apache-2.0 in a signed
+# document.
+canonical_apache_2_0=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+licence_sha=$(shasum -a 256 "$licence_file" | awk '{print $1}')
 declared=$(jq -r '.metadata.component.licenses[0].license.id' "$sbom")
-if ! grep -q "Apache License" "$licence_file" || [ "$declared" != "Apache-2.0" ]; then
-    echo "sbom declares $declared but $licence_file does not look like Apache 2.0" >&2
+if [ "$licence_sha" != "$canonical_apache_2_0" ]; then
+    echo "$licence_file is not the canonical Apache License 2.0" >&2
+    echo "  expected sha256 $canonical_apache_2_0" >&2
+    echo "  got             $licence_sha" >&2
+    echo "the sbom would declare $declared for a file that is not it." >&2
     exit 1
 fi
 
