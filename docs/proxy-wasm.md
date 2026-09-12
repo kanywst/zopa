@@ -77,7 +77,9 @@ The exports above receive the AST bytes on every call, so each one pays a JSON p
 
 Ownership: `policy_compile` copies the AST bytes onto the policy's own arena, so the caller may free its buffer as soon as the call returns. The policy itself lives until `policy_release`. Nothing in the module can know when a host is finished with a policy, so a dropped handle leaks it for the life of the module -- the same contract as `malloc`.
 
-Handles are table indices, not pointers, and are validated on every use. A stale, doubled, zero, or forged handle returns `-1`, which every documented caller denies on. Returning raw pointers would turn the same host mistake into a read of arbitrary linear memory, which in an authorization engine is a bypass primitive rather than a crash.
+Handles are not pointers, and are validated on every use. A stale, doubled, zero, or forged handle returns `-1`, which every documented caller denies on. Returning raw pointers would turn the same host mistake into a read of arbitrary linear memory, which in an authorization engine is a bypass primitive rather than a crash.
+
+A bare table index would not be enough for that. Slots are reused, so releasing a handle and compiling again would reissue the same number for a different policy, and a caller still holding the old one would get an authoritative-looking decision from the wrong policy rather than a denial. A handle therefore packs a slot index in its low 16 bits and the generation that slot was on when the handle was issued in the bits above; `lookup` checks both. A slot whose generation is exhausted is retired rather than wrapped, and `policy_compile` returns `-1` once the table is full, because wrapping is exactly the reuse the scheme exists to prevent.
 
 ## Imports
 
