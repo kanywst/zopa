@@ -1,6 +1,6 @@
 {
   "name": "partial_set",
-  "note": "OPA makes `data.authz.deny` the set {\"blocked\"}; zopa rules are complete and cannot hold one. Pins that the construct is refused end to end rather than flattened into a boolean, which is what it used to be.",
+  "note": "OPA makes `data.authz.deny` the set {\"blocked\"}; zopa rules are complete and cannot hold one. Pins that the construct is refused end to end rather than flattened into a boolean, which is what it used to be. What this pins is the refusal, not the flattening. If the guard were removed the run would still fail -- conversion would produce a rule named `deny` and no `allow`, and the harness always targets `allow` -- but for the wrong reason. zopa has no complete rule that could hold the set OPA builds, so there is no decision to compare against and no way to make this fixture discriminate. `with` and `else` have fixtures that do.",
   "rego": "package authz\n\ndeny contains \"blocked\" if input.x == 1\n",
   "cases": [
     {

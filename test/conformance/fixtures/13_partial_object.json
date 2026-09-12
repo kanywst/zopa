@@ -1,6 +1,6 @@
 {
   "name": "partial_object",
-  "note": "The object spelling of the same problem, and the one the first fix missed: its head carries both a key and a value, so a guard testing for a missing value skipped it and the key was silently discarded.",
+  "note": "The object spelling of the same problem, and the one the first fix missed: its head carries both a key and a value, so a guard testing for a missing value skipped it and the key was silently discarded. Same caveat as 12_partial_set: this pins that the construct is refused end to end, not that the discarded key would be caught by a decision. The object spelling is here because the first version of the guard missed it -- its head carries both a key and a value, so a check for a missing value skipped it.",
   "rego": "package authz\n\nroles[input.user] = input.role if input.x == 1\n",
   "cases": [
     {

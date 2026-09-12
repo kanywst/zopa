@@ -117,6 +117,20 @@ class Conversions(unittest.TestCase):
         ast = self.assertConverts("allow if input.xs[4294967295] == 1")
         self.assertEqual(ast["rules"][0]["body"][0]["left"]["path"][-1], 4294967295)
 
+    def test_nullary_function_is_indistinguishable_and_converts(self):
+        """Records a limitation, not a desired behaviour.
+
+        OPA emits byte-identical heads for `f() if ...` and `f if ...`
+        -- no `args` on either -- so the guard on function definitions
+        cannot see the nullary case. It converts into a rule named `f`,
+        addressable as data where OPA's function is not. This test
+        exists so that the day OPA distinguishes them, it fails and
+        someone decides deliberately.
+        """
+        nullary = self.assertConverts("f() if input.x == 1")
+        plain = self.assertConverts("f if input.x == 1")
+        self.assertEqual(nullary, plain)
+
     def test_array_index_becomes_a_numeric_segment(self):
         ast = self.assertConverts('allow if input.groups[1].name == "ops"')
         path = ast["rules"][0]["body"][0]["left"]["path"]

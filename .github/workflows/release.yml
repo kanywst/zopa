@@ -87,65 +87,17 @@ jobs:
       # cannot know what compiled the thing, what licence it carries, or
       # where it came from. Without this the document is technically
       # valid and practically useless.
+      # The jq lives in a script so it can be tested -- it decides
+      # whether a release ships, and inline here nothing could exercise
+      # it short of pushing a tag. See test/sbom_annotate_test.py.
       - name: describe the subject in the sbom
-        # Both values reach the shell through `env`, never through `${{ }}`
-        # splicing. An expression is substituted into the script as raw
-        # text before any shell parses it, and `wasm-name` embeds
-        # GITHUB_REF_NAME -- git permits `$`, backticks, `;` and `(` `)`
-        # in a tag, and a tag matching `v*` triggers this workflow into a
-        # job holding `id-token: write`. `pack` above already uses the
-        # safe idiom.
         env:
           WASM_NAME: ${{ steps.pack.outputs.wasm-name }}
           WASM_SHA256: ${{ steps.pack.outputs.wasm-sha256 }}
         run: |
           set -euo pipefail
-          sbom="${WASM_NAME}.cdx.json"
-          tmp=$(mktemp)
-          jq --arg zig "$(zig version)" \
-             --arg sha "$WASM_SHA256" \
-             --arg ver "${GITHUB_REF_NAME}" '
-            # CycloneDX moved metadata.tools from an array to an object
-            # with a components list; accept either so a syft upgrade
-            # cannot silently break this. Pre-1.5 entries are bare
-            # vendor/name/version tools with no `type`, which the
-            # component schema requires -- backfill it, or the
-            # compatibility branch would emit a document that fails
-            # stricter validation while every check here still passed.
-            (.metadata.tools) |= (
-              if type == "array"
-              then {"components": [.[] | {type: "application"} + .]}
-              else . end
-            )
-            | .metadata.tools.components += [{
-                "type": "application", "name": "zig", "version": $zig
-              }]
-            | .metadata.component = {
-                "type": "library",
-                "name": "zopa",
-                "version": $ver,
-                "description": "Authorization engine for proxy-wasm, compiled to wasm32-freestanding",
-                "licenses": [{"license": {"id": "Apache-2.0"}}],
-                "hashes": [{"alg": "SHA-256", "content": $sha}],
-                "externalReferences": [{"type": "vcs", "url": "https://github.com/kanywst/zopa"}]
-              }' "$sbom" > "$tmp"
-          mv "$tmp" "$sbom"
-
-          # Fail the release rather than publish an SBOM that describes
-          # the wrong bytes. The hash is recomputed from the artifact on
-          # disk rather than reusing the `pack` output: Actions
-          # substitutes that expression into both the write above and any
-          # check here, so comparing it to itself would pass even if the
-          # wasm had been replaced in between, which is the only scenario
-          # worth guarding.
-          actual=$(shasum -a 256 "$WASM_NAME" | awk '{print $1}')
-          recorded=$(jq -r '.metadata.component.hashes[] | select(.alg == "SHA-256") | .content' "$sbom")
-          if [ "$actual" != "$recorded" ]; then
-            echo "sbom records $recorded but $WASM_NAME hashes to $actual" >&2
-            exit 1
-          fi
-          jq -e '.metadata.tools.components[] | select(.name == "zig")' "$sbom" >/dev/null
-          echo "sbom: $(jq -r '.specVersion' "$sbom"), $(jq '.components | length' "$sbom") dependency component(s)"
+          tools/sbom-annotate.sh \
+            "${WASM_NAME}.cdx.json" "$WASM_NAME" "$WASM_SHA256" "$GITHUB_REF_NAME"
 
       - name: upload wasm
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
