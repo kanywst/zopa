@@ -59,6 +59,17 @@ def walk_rule(rule: dict[str, Any]) -> dict[str, Any]:
     head = rule["head"]
     name = head["name"]
 
+    # A partial rule -- `deny contains msg if ...`, or `p[k] = v` --
+    # builds a set or object across every definition that holds. zopa
+    # rules are complete: one name, one value. Converting the head to a
+    # plain boolean rule loses the collected values entirely, and turns
+    # definitions OPA unions into definitions zopa treats as conflicting.
+    if head.get("key") is not None and head.get("value") is None:
+        raise Unsupported(
+            f"partial set rule `{name}` not supported: "
+            "zopa rules are complete, so the collected values would be lost"
+        )
+
     out: dict[str, Any] = {"type": "rule", "name": name}
 
     if rule.get("default"):
@@ -96,6 +107,14 @@ def _is_literal_true(term: dict[str, Any]) -> bool:
 
 
 def walk_expr(expr: dict[str, Any]) -> dict[str, Any]:
+    # `with` rewrites the document the body is evaluated against. zopa
+    # has no equivalent, and dropping the modifier silently would emit
+    # an AST that answers a different question than the Rego it came
+    # from -- the same class of divergence the JSON parser is strict
+    # about, arriving through the converter instead.
+    if expr.get("with"):
+        raise Unsupported("`with` modifier not supported: it would change the input the body sees")
+
     inner = walk_expr_inner(expr["terms"])
     if expr.get("negated"):
         return {"type": "not", "expr": inner}
@@ -109,6 +128,19 @@ def walk_expr_inner(terms: Any) -> dict[str, Any]:
     if isinstance(terms, dict):
         if "domain" in terms:
             return walk_every(terms)
+        # A bare `some x in xs` declares a binding for the expressions
+        # that follow it in the same body. zopa's `some` is different:
+        # it owns the body it binds over. Expressing one as the other
+        # means restructuring the rule, which the converter does not do.
+        # Without this the dict falls through to `walk_term`, which
+        # reaches for a "type" key that a symbols declaration does not
+        # have and dies with a KeyError -- a traceback where the runner
+        # expects either an AST or a clean `Unsupported`.
+        if "symbols" in terms:
+            raise Unsupported(
+                "standalone `some ... in` not supported: zopa's `some` binds over its own "
+                "body, so the declaration cannot be lifted out of it"
+            )
         # Single-term form. In body position, evaluate the term and
         # treat truthiness directly. zopa's evaluator handles this:
         # a bare `value` / `ref` resolves and is checked against
@@ -140,7 +172,7 @@ def walk_call_form(terms: list[dict[str, Any]]) -> dict[str, Any]:
             "args": [walk_term(a) for a in args],
         }
 
-    raise Unsupported(f"unsupported call: {op_name}")
+    raise Unsupported(f"unsupported call: {op_name or _describe_ref(op_ref)}")
 
 
 def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
@@ -268,6 +300,18 @@ def _ref_to_path(segments: list[dict[str, Any]]) -> list[str]:
         else:
             raise Unsupported(f"unsupported ref segment type: {t}")
     return path
+
+
+def _describe_ref(term: dict[str, Any]) -> str:
+    """Best-effort name for an operator `_flat_var_name` cannot flatten.
+
+    Multi-segment refs are how OPA spells the operators that have no bare
+    name -- `in` arrives as `internal.member_2`. Reporting an empty
+    string there tells the reader nothing about what was rejected.
+    """
+    segs = term.get("value") or []
+    parts = [str(seg.get("value")) for seg in segs if isinstance(seg, dict) and "value" in seg]
+    return ".".join(parts) if parts else "<unnamed>"
 
 
 def _flat_var_name(term: dict[str, Any]) -> str:
