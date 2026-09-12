@@ -1,0 +1,11 @@
+{
+  "name": "with_modifier",
+  "note": "`with` rewrites the input the body sees. The body reads only the overridden field and the input does not carry it, so OPA allows and a converter that dropped the modifier would deny -- this fixture fails rather than passes if the silent drop ever comes back. Recorded as SKIP today because rego2ast refuses the construct.",
+  "rego": "package authz\n\nallow if input.y == 2 with input.y as 2\n",
+  "cases": [
+    {
+      "input": {},
+      "expected": 1
+    }
+  ]
+}

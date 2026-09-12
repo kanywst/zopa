@@ -144,10 +144,20 @@ pub fn build(b: *std.Build) void {
         "--check",
         "test/conformance/coverage.json",
     });
+    // The diagnostics rego2ast promises. The reach table records
+    // convert-or-not as a boolean, so a refusal naming the wrong
+    // construct still reads as "does not convert" -- these assert the
+    // message, which is the part a reader acts on.
+    const rego2ast_test_run = b.addSystemCommand(&.{
+        "python3",
+        "test/conformance/rego2ast_test.py",
+    });
+
     const test_coverage_step = b.step(
         "test-coverage",
-        "Check which Rego constructs rego2ast converts against the recorded table",
+        "Check rego2ast's diagnostics and which Rego constructs it converts",
     );
+    test_coverage_step.dependOn(&rego2ast_test_run.step);
     test_coverage_step.dependOn(&coverage_run.step);
 
     // `zig build test-conformance` -> rego (via `opa parse` +

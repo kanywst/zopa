@@ -1,0 +1,15 @@
+{
+  "name": "partial_set",
+  "note": "OPA makes `data.authz.deny` the set {\"blocked\"}; zopa rules are complete and cannot hold one. Pins that the construct is refused end to end rather than flattened into a boolean, which is what it used to be.",
+  "rego": "package authz\n\ndeny contains \"blocked\" if input.x == 1\n",
+  "cases": [
+    {
+      "input": {
+        "x": 1,
+        "user": "alice",
+        "role": "admin"
+      },
+      "expected": 1
+    }
+  ]
+}
