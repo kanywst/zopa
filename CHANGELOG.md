@@ -4,6 +4,12 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-12
+
+A minor bump: the generic ABI gains a compiled-policy path, which is additive, but it changes what the fast way to drive zopa is. Nothing existing breaks -- `evaluate`, `evaluate_target` and `evaluate_addressed` are untouched.
+
+The short version: if you drive the same policy across requests through `evaluate`, you are paying an AST parse per decision. `policy_compile` once and `evaluate_compiled` after it takes the benchmark's RBAC fixture from 5.76 us to 1.32 us. This release also corrects two README claims that turned out to be wrong once there was a benchmark to check them against.
+
 ### Added
 
 - **Compiled policies on the generic ABI: `policy_compile`, `policy_release`, `evaluate_compiled`, `evaluate_compiled_addressed`.** `evaluate` receives the AST bytes on every call and cannot know they are the ones it parsed last time, so it rebuilds the policy per decision; the benchmark put that at 4.4 us of the 5.76 us it spent on the RBAC fixture, which is why OPA's WASM build was beating it there. A host can now build the policy once and evaluate against a handle -- the arrangement `proxy_on_configure` has always used internally -- which takes the same fixture to **1.32 us, ahead of OPA-in-wasm's 2.24**. Handles are validated, never pointers: a stale, doubled, zero, or forged handle returns `-1` and denies rather than following a dangling reference. A handle carries the generation of the slot it was issued for as well as the index, so releasing one and compiling another policy into the freed slot does not make the old handle resolve to the new policy -- a bare index would have turned a released handle into an authoritative decision from the wrong policy once the slot was reused. The host owns the handle and must release it; a dropped one leaks the policy for the life of the module, the same contract as `malloc`. Release build size: ~63 KB (+1.8 KB).
@@ -126,7 +132,8 @@ First tagged release. Public surface (export names, AST schema, callback semanti
 
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
-[Unreleased]: https://github.com/kanywst/zopa/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/kanywst/zopa/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/kanywst/zopa/releases/tag/v0.4.0
 [0.3.1]: https://github.com/kanywst/zopa/releases/tag/v0.3.1
 [0.3.0]: https://github.com/kanywst/zopa/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kanywst/zopa/releases/tag/v0.2.0
