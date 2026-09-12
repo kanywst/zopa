@@ -7,8 +7,10 @@
 #
 # Two scenarios, each with its own bootstrap and its own Envoy process:
 #
-#   request  envoy.yaml         allow iff method == GET
-#   phases   envoy-phases.yaml  allow_body + allow_response rules
+#   request  envoy.yaml          allow iff method == GET
+#   phases   envoy-phases.yaml   allow_body + allow_response rules
+#   targets  envoy-targets.yaml  an explicit `targets` block: one
+#                                enforcing rule and one advisory
 #
 # Environment:
 #   ZOPA_TEST_PORT          data plane port      (default 10070)
@@ -76,6 +78,22 @@ start_envoy() {
         -e "s|__ADMIN_PORT__|$ADMIN_PORT|g" \
         -e "s|__RUNTIME__|$RUNTIME|g" \
         "$template" > "$run_yaml"
+
+    # Refuse to start on a port something else already holds.
+    #
+    # The readiness check below polls the admin port, which a *stale*
+    # Envoy answers exactly as happily as a fresh one -- so without this
+    # the suite silently tests the previous scenario's policy, or a
+    # leftover process from an earlier run. That is not hypothetical: it
+    # produced two checks that "passed" against the wrong filter and two
+    # that failed for a reason unrelated to what they were testing.
+    for port in "$PORT" "$ADMIN_PORT"; do
+        if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+            echo "port $port is already in use; refusing to run $1 against it" >&2
+            lsof -nP -iTCP:"$port" -sTCP:LISTEN >&2 || true
+            exit 1
+        fi
+    done
 
     envoy -c "$run_yaml" --log-level warn --component-log-level wasm:debug > "$LOG" 2>&1 &
     ENVOY_PID=$!
@@ -230,6 +248,32 @@ check "POST with an empty body -> 200 (host skips the body phase)" 200 \
     --data '' "$base/"
 
 check "GET /teapot -> 503 response deny" 503 -X GET "$base/teapot"
+
+stop_envoy
+
+# ---------------------------------------------------------------------------
+# Scenario 3: an explicit `targets` block.
+#
+# Two rules fire on the request phase against the same input: an
+# enforcing `authz.allow` (GET only) and an advisory `audit.ok`
+# (/public only). The advisory one denies on every path below except
+# /public, which is the point -- an audit target must never turn a
+# request away.
+# ---------------------------------------------------------------------------
+echo
+echo "-- scenario: targets ($RUNTIME)"
+start_envoy envoy-targets.yaml
+
+check "GET /public -> 200 (both targets allow)"        200 -X GET "$base/public"
+# The audit target denies here and the request still succeeds. If
+# on_deny were ignored and audit were treated as enforcing, this is the
+# case that would turn into a 403.
+check "GET /private -> 200 (audit denies, not enforced)" 200 -X GET "$base/private"
+check "POST /public -> 403 (enforcing target denies)"   403 -X POST "$base/public"
+# Both deny: still one 403, and from the enforcing rule.
+check "POST /private -> 403 (both deny)"                403 -X POST "$base/private"
+
+stop_envoy
 
 if (( failed > 0 )); then
     echo
