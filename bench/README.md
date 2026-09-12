@@ -31,15 +31,16 @@ Each fixture is a JSON object with `name`, `input`, `ast`, and — when the poli
 ## Running
 
 ```bash
-zig build --release=small     # produces zig-out/bin/zopa.wasm
 zig build bench               # all available engines, full iteration counts
 ```
 
-Or directly, for the options:
+`zig build bench` builds its own `ReleaseSmall` artifact and measures that, whatever `-Doptimize` you passed. The test suites run correctly at any optimize mode; a benchmark does not, and measuring the ~940 KB debug build reports a wrong number rather than failing.
+
+Options can be passed through the build step (`zig build bench -- --quick`), or by invoking the harness directly:
 
 ```bash
-node bench/run.mjs                          # same as `zig build bench`
 node bench/run.mjs path/to/zopa.wasm        # benchmark a specific build
+node bench/run.mjs                          # falls back to zig-out/bin/zopa.wasm
 node bench/run.mjs --quick                  # CI smoke counts (seconds, not minutes)
 node bench/run.mjs --engines=zopa,opa-wasm  # subset
 node bench/run.mjs --json=bench/results/local.json

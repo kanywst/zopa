@@ -131,10 +131,14 @@ async function throughput(engine, mod) {
 async function coldStart(mod, fixture) {
   const t0 = process.hrtime.bigint();
   const engine = await mod.setup(fixture, opts);
-  await engine.decide();
-  const ms = micros(t0, process.hrtime.bigint()) / 1000;
-  engine.close();
-  return ms;
+  try {
+    await engine.decide();
+    return micros(t0, process.hrtime.bigint()) / 1000;
+  } finally {
+    // This instance is a second sidecar process for `opa-http`. If the
+    // first decision throws it still has to be reaped.
+    engine.close();
+  }
 }
 
 // ------------------------------------------------------------- driver
@@ -182,49 +186,62 @@ for (const fixture of fixtures) {
     }
   }
 
-  // Agreement gate. zopa is the reference only because it is the
-  // subject; a mismatch means the fixture's AST and its Rego have
-  // drifted apart, and neither number below would mean anything.
-  const decisions = new Map();
-  for (const { mod, inst } of engines) decisions.set(mod.id, await inst.decide());
-  const reference = decisions.get(zopa.id);
-  for (const [engineId, decision] of decisions) {
-    if (decision !== reference) {
-      console.error(
-        `  ${fixture.name}: DISAGREEMENT -- zopa says ${reference}, ${engineId} says ${decision}`,
-      );
+  // Everything below can throw -- `opa-http`'s decide() rejects on any
+  // non-2xx, so one hiccup from the sidecar would otherwise abort the
+  // process before cleanup and leave its `opa run --server` child and
+  // temp dir behind, plus skip teardown for every other engine.
+  try {
+    // Agreement gate. zopa is the reference only because it is the
+    // subject; a mismatch means the fixture's AST and its Rego have
+    // drifted apart, and neither number below would mean anything.
+    const decisions = new Map();
+    for (const { mod, inst } of engines) decisions.set(mod.id, await inst.decide());
+    const reference = decisions.get(zopa.id);
+    for (const [engineId, decision] of decisions) {
+      if (decision !== reference) {
+        console.error(
+          `  ${fixture.name}: DISAGREEMENT -- zopa says ${reference}, ${engineId} says ${decision}`,
+        );
+        disagreements++;
+      }
+    }
+    if (reference === -1) {
+      console.error(`  ${fixture.name}: zopa returned -1 (error); refusing to time an error path`);
       disagreements++;
     }
-  }
-  if (reference === -1) {
-    console.error(`  ${fixture.name}: zopa returned -1 (error); refusing to time an error path`);
-    disagreements++;
-  }
 
-  if (disagreements === 0) {
+    if (disagreements === 0) {
+      for (const { mod, inst } of engines) {
+        for (let k = 0; k < BUDGET.warmup; k++) await inst.decide();
+        const opsPerSec = await throughput(inst, mod);
+        results.push({
+          fixture: fixture.name,
+          engine: mod.id,
+          label: mod.label,
+          decision: decisions.get(mod.id),
+          ...(await latency(inst, mod)),
+          opsPerSec,
+          // Per-decision cost with no instrumentation in the loop at all.
+          // On engines answering in well under a microsecond this is the
+          // number to trust; the percentiles beside it still carry the
+          // tail shape, which a loop total cannot show.
+          amortizedMicros: 1e6 / opsPerSec,
+          memoryBytes: (await inst.memoryBytes?.()) ?? null,
+          artifactBytes: inst.artifactBytes?.() ?? null,
+          coldStartMs: await coldStart(mod, fixture),
+        });
+      }
+    }
+  } finally {
+    // One engine failing to close must not strand the others.
     for (const { mod, inst } of engines) {
-      for (let k = 0; k < BUDGET.warmup; k++) await inst.decide();
-      const opsPerSec = await throughput(inst, mod);
-      results.push({
-        fixture: fixture.name,
-        engine: mod.id,
-        label: mod.label,
-        decision: decisions.get(mod.id),
-        ...(await latency(inst, mod)),
-        opsPerSec,
-        // Per-decision cost with no instrumentation in the loop at all.
-        // On engines answering in well under a microsecond this is the
-        // number to trust; the percentiles beside it still carry the
-        // tail shape, which a loop total cannot show.
-        amortizedMicros: 1e6 / opsPerSec,
-        memoryBytes: (await inst.memoryBytes?.()) ?? null,
-        artifactBytes: inst.artifactBytes?.() ?? null,
-        coldStartMs: await coldStart(mod, fixture),
-      });
+      try {
+        inst.close();
+      } catch (err) {
+        console.error(`  ${fixture.name} / ${mod.id}: close failed -- ${err.message}`);
+      }
     }
   }
-
-  for (const { inst } of engines) inst.close();
 }
 
 // ------------------------------------------------------------- report

@@ -103,8 +103,31 @@ pub fn build(b: *std.Build) void {
     // against OPA-in-wasm and an OPA HTTP sidecar. The OPA engines are
     // skipped (and named) when no `opa` is on PATH, so this step works
     // without one. See bench/README.md.
+    //
+    // The benchmark builds its own ReleaseSmall artifact and is handed
+    // that path, rather than depending on the install step like the test
+    // suites do. Those run correctly at any optimize mode; a benchmark
+    // does not. `zig build bench` with no flags used to measure the
+    // ~940 KB debug build and report it without comment, which is a
+    // silently wrong number rather than a failure.
+    const bench_exe = b.addExecutable(.{
+        .name = "zopa-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+        }),
+    });
+    bench_exe.entry = .disabled;
+    bench_exe.rdynamic = true;
+
     const bench_run = b.addSystemCommand(&.{ "node", "bench/run.mjs" });
-    bench_run.step.dependOn(b.getInstallStep());
+    bench_run.addFileArg(bench_exe.getEmittedBin());
+    // Forwarded so `zig build bench -- --quick` and `-- --json=...`
+    // reach the harness. Without this they are accepted and silently
+    // dropped, which is how CI ended up running the full benchmark while
+    // asking for the smoke one.
+    if (b.args) |args| bench_run.addArgs(args);
     const bench_step = b.step(
         "bench",
         "Benchmark zopa against OPA (wasm + HTTP sidecar) in Node.js",
