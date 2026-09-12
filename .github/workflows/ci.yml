@@ -67,9 +67,14 @@ jobs:
         with:
           version: 0.16.0
 
+      # 24, where the rest of the matrix is on 22. Node 22's V8 dies with
+      # "Fatal error: unreachable code" inside
+      # Deoptimizer::DoComputeBuiltinContinuation when the Cedar wasm
+      # binding is driven in a hot loop -- a V8 crash, not a harness
+      # failure. The other jobs never touch Cedar and stay on 22.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 24
 
       # Without opa the harness skips both comparison engines and only
       # times zopa, which would silently stop exercising the agreement
@@ -98,8 +103,16 @@ jobs:
       # Not vendored and not in a package.json: the harness resolves it
       # at run time and skips itself if absent. Installed here so the
       # agreement gate actually covers Cedar on every PR.
+      # --ignore-scripts, and the version pinned: this is the only npm
+      # install anywhere in this repository, and the `install opa` step
+      # above verifies a checksum before executing what it downloaded
+      # for exactly the same reason. cedar-wasm ships prebuilt wasm, so
+      # nothing here needs an install-time build step to run; the
+      # `require()` below the install would fail loudly if that changed.
       - name: install cedar
-        run: npm i --no-save @cedar-policy/cedar-wasm@4.12.0
+        run: |
+          npm i --no-save --ignore-scripts @cedar-policy/cedar-wasm@4.12.0
+          node -e 'require("@cedar-policy/cedar-wasm/nodejs").getCedarVersion()'
 
       - name: bench (smoke)
         run: zig build bench -- --quick --json=bench-smoke.json
