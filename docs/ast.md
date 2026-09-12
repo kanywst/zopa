@@ -154,7 +154,7 @@ Reaching it takes defining `f()`, never calling it (the call site is refused as 
 
 A binding whose value is undefined makes the body undefined, so the rule does not hold. Binding null instead would let `x := input.missing` compare equal to another missing field and quietly succeed.
 
-A later binding of the same name shadows an earlier one, and a binding never escapes its own rule body.
+A name may be bound **once per scope**. Binding it twice in one body is `error.DuplicateAssignment`, matching OPA, which refuses `x := 1; x := 2` at compile time with `rego_compile_error: var x assigned above`. The same name inside a nested `some` body is a different scope and is fine. A binding never escapes its own rule body.
 
 Only meaningful as a body statement. A body that ends in one still holds, matching Rego (`allow if { x := 1 }` is true), but nested where there is nothing to scope over -- inside `not`, or as the body of a `some` -- it is `error.AssignOutsideBody`, which surfaces as `-1` and denies. Destructuring targets (`[a, b] := ...`) are not supported; `tools/rego2ast.py` refuses them.
 

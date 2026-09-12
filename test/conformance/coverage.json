@@ -1,6 +1,6 @@
 {
   "supported": 36,
-  "total": 51,
+  "total": 52,
   "constructs": {
     "rule/constant": true,
     "rule/default-deny": true,
@@ -16,6 +16,7 @@
     "cmp/assign": true,
     "cmp/assign-chain": true,
     "cmp/assign-destructure": false,
+    "cmp/assign-rebind": false,
     "lit/string": true,
     "lit/number": true,
     "lit/float": true,

@@ -50,6 +50,7 @@ CORPUS: list[tuple[str, str, str]] = [
     ("cmp/assign", "assignment in a body", "allow if {\n\tx := input.x\n\tx == 1\n}"),
     ("cmp/assign-chain", "a binding read by a later binding", "allow if {\n\tu := input.u\n\tr := u.r\n\tr == 1\n}"),
     ("cmp/assign-destructure", "destructuring assignment", "allow if { [a, b] := input.pair }"),
+    ("cmp/assign-rebind", "binding a name twice in one body", "allow if {\n\tx := 1\n\tx := 2\n\tx == 2\n}"),
 
     # --- literals ---
     ("lit/string", "string literal", 'allow if input.x == "s"'),

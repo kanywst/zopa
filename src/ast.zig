@@ -256,6 +256,35 @@ fn validateDefaults(bundle: Modules) !void {
     }
 }
 
+/// Reject binding the same name twice in one body.
+///
+/// Rego's `:=` is single-assignment per scope: OPA refuses
+/// `x := 1; x := 2` at compile time with `rego_compile_error: var x
+/// assigned above`. The conformance pipeline runs `opa parse`, not
+/// `opa check`, so that rejection never fires before the AST reaches
+/// zopa -- accepting it here would make zopa's policy set wider than
+/// Rego's and give "last write wins" semantics no OPA policy can
+/// produce. Same reasoning as `DuplicateDefaultRule`.
+///
+/// Scoped to one body's statement list. An assignment inside a nested
+/// `some` body is a different scope and may reuse the name, which is
+/// what Rego does too.
+fn rejectReassignment(body: []const *const Expr) !void {
+    for (body, 0..) |expr, i| {
+        const a = switch (expr.*) {
+            .assign => |a| a,
+            else => continue,
+        };
+        for (body[0..i]) |earlier| {
+            const b = switch (earlier.*) {
+                .assign => |b| b,
+                else => continue,
+            };
+            if (std.mem.eql(u8, a.var_name, b.var_name)) return error.DuplicateAssignment;
+        }
+    }
+}
+
 fn buildRule(allocator: std.mem.Allocator, node: Value) !Rule {
     if (node != .object) return error.InvalidRule;
     const obj = node.object;
@@ -275,6 +304,7 @@ fn buildRule(allocator: std.mem.Allocator, node: Value) !Rule {
         for (b_v.array, 0..) |item, i| {
             buf[i] = try buildExpr(allocator, item);
         }
+        try rejectReassignment(buf);
         break :body buf;
     } else try allocator.alloc(*const Expr, 0);
 

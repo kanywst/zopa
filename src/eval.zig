@@ -562,11 +562,16 @@ test "assign: binds for the rest of the body" {
     try testing.expect(!try evaluate(&arena, "{}", policy));
 }
 
-test "assign: a later binding shadows an earlier one" {
+test "assign: binding a name twice in one body is rejected" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const policy =
+    // Rego is single-assignment per scope: `opa check` refuses this
+    // with `rego_compile_error: var x assigned above`. The conformance
+    // pipeline runs `opa parse`, which accepts it, so without this
+    // zopa's policy set would be wider than Rego's and would run
+    // last-write-wins semantics no OPA policy can produce.
+    const rebound =
         \\{"type":"module","rules":[{"type":"rule","name":"allow","body":[
         \\  {"type":"assign","var":"x","value":{"type":"value","value":1}},
         \\  {"type":"assign","var":"x","value":{"type":"value","value":2}},
@@ -574,7 +579,30 @@ test "assign: a later binding shadows an earlier one" {
         \\   "left":{"type":"ref","path":["x"]},
         \\   "right":{"type":"value","value":2}}]}]}
     ;
-    try testing.expect(try evaluate(&arena, "{}", policy));
+    try testing.expectError(error.DuplicateAssignment, evaluate(&arena, "{}", rebound));
+
+    // Distinct names in one body are fine.
+    const distinct =
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","body":[
+        \\  {"type":"assign","var":"x","value":{"type":"value","value":1}},
+        \\  {"type":"assign","var":"y","value":{"type":"value","value":1}},
+        \\  {"type":"compare","op":"eq",
+        \\   "left":{"type":"ref","path":["x"]},
+        \\   "right":{"type":"ref","path":["y"]}}]}]}
+    ;
+    try testing.expect(try evaluate(&arena, "{}", distinct));
+
+    // The same name in a *different* scope is legal, as it is in Rego:
+    // the inner body is its own scope.
+    const nested =
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","body":[
+        \\  {"type":"assign","var":"x","value":{"type":"value","value":1}},
+        \\  {"type":"some","var":"g","source":{"type":"value","value":[1]},
+        \\   "body":{"type":"compare","op":"eq",
+        \\           "left":{"type":"ref","path":["g"]},
+        \\           "right":{"type":"ref","path":["x"]}}}]}]}
+    ;
+    try testing.expect(try evaluate(&arena, "{}", nested));
 }
 
 test "assign: the binding does not leak past its own body" {

@@ -1156,14 +1156,18 @@ check('assign: wrong value denies', decide({ user: { role: 'guest' } }, assignPo
 // missing field and quietly hold.
 check('assign: undefined right-hand side denies', decide({}, assignPolicy), 0);
 
+// Rego is single-assignment per scope -- `opa check` refuses this with
+// `rego_compile_error: var x assigned above` -- and `opa parse`, which
+// this pipeline uses, does not. Rejecting keeps zopa'''s policy set from
+// being wider than Rego'''s.
 check(
-  'assign: a later binding shadows an earlier one',
+  'assign: binding a name twice in one body -> -1',
   decide({}, { type: "module", rules: [{ type: "rule", name: "allow", body: [
     { type: "assign", var: "x", value: { type: "value", value: 1 } },
     { type: "assign", var: "x", value: { type: "value", value: 2 } },
     { type: "compare", op: "eq", left: { type: "ref", path: ["x"] }, right: { type: "value", value: 2 } },
   ] }] }),
-  1,
+  -1,
 );
 
 // Rego holds for a body that is only a binding, checked against

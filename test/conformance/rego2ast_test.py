@@ -87,6 +87,14 @@ class Refusals(unittest.TestCase):
             "allow if input.xs[99999999999999999999] == 1", "above the maximum zopa accepts",
         )
 
+    def test_reassignment_in_one_body_is_refused(self):
+        # `opa check` gives rego_compile_error: var x assigned above.
+        # `opa parse` -- what this pipeline runs -- accepts it, so the
+        # converter has to be the one to say no.
+        self.assertRefused(
+            "allow if {\n\tx := 1\n\tx := 2\n\tx == 2\n}", "assigned twice in one body",
+        )
+
     def test_unnamed_operator_is_described(self):
         # `in` reaches OPA's AST as internal.member_2 and has no bare
         # name; reporting an empty one tells the reader nothing.
@@ -140,6 +148,11 @@ class Conversions(unittest.TestCase):
         # array.
         self.assertIsInstance(path[2], int)
         self.assertNotIsInstance(path[2], bool)
+
+    def test_distinct_bindings_in_one_body_convert(self):
+        ast = self.assertConverts("allow if {\n\tx := input.a\n\ty := input.b\n\tx == y\n}")
+        kinds = [e["type"] for e in ast["rules"][0]["body"]]
+        self.assertEqual(kinds, ["assign", "assign", "compare"])
 
     def test_every_with_a_single_expression_body(self):
         ast = self.assertConverts("allow if every x in input.xs { x == 1 }")

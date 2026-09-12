@@ -122,6 +122,23 @@ def walk_rule(rule: dict[str, Any]) -> dict[str, Any]:
     # Regular rule. Body is the list of expressions; head value (if
     # not the implicit `true`) becomes the rule's `value`.
     body = [walk_expr(e) for e in rule.get("body", [])]
+
+    # Rego's `:=` is single-assignment per scope -- OPA refuses
+    # `x := 1; x := 2` with `rego_compile_error: var x assigned above`.
+    # This pipeline runs `opa parse`, not `opa check`, so that rejection
+    # never fires; without this the converter would emit an AST for a
+    # policy real OPA will not load.
+    seen: set[str] = set()
+    for expr in body:
+        if expr.get("type") != "assign":
+            continue
+        if expr["var"] in seen:
+            raise Unsupported(
+                f"`{expr['var']}` is assigned twice in one body; "
+                "Rego allows a name to be bound once per scope"
+            )
+        seen.add(expr["var"])
+
     out["body"] = body
 
     head_val = head.get("value")

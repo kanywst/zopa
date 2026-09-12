@@ -10,7 +10,7 @@ Tiny, zero-allocation authorization engine for proxy-wasm and the edge. ~60 KB. 
 
 Hosts hand it a request input and a policy AST, both as JSON; zopa returns allow, deny, or error. It runs as a [proxy-wasm][pw] filter in Envoy or any other proxy-wasm 0.2.1 host, and the same binary works as a plain `WebAssembly.Module` for hosts that just want to call `evaluate(input, ast)`.
 
-**Status: alpha.** The AST covers a subset of Rego -- **36 of the 51 constructs** probed by `zig build test-coverage`, with the gaps named rather than described as "useful" (see [Rego coverage](#rego-coverage)). CI runs the suite under three wasm hosts (Node, wasmtime, and a real Envoy). Export names, AST schema, and callback semantics will change before 1.0.
+**Status: alpha.** The AST covers a subset of Rego -- **36 of the 52 constructs** probed by `zig build test-coverage`, with the gaps named rather than described as "useful" (see [Rego coverage](#rego-coverage)). CI runs the suite under three wasm hosts (Node, wasmtime, and a real Envoy). Export names, AST schema, and callback semantics will change before 1.0.
 
 [pw]: https://github.com/proxy-wasm/spec
 
@@ -101,7 +101,7 @@ Every row is reproducible from a clean checkout, but the machine is a developer 
 
 ## Rego coverage
 
-`tools/rego2ast.py` converts `opa parse --format json` output into zopa's AST, and refuses -- loudly -- anything it cannot express. `zig build test-coverage` walks a corpus of one-construct policies and records what converts, so this is a table rather than an adjective. Currently **36 of 51**. What is missing:
+`tools/rego2ast.py` converts `opa parse --format json` output into zopa's AST, and refuses -- loudly -- anything it cannot express. `zig build test-coverage` walks a corpus of one-construct policies and records what converts, so this is a table rather than an adjective. Currently **36 of 52**. What is missing:
 
 | Not supported | Why it matters |
 | --- | --- |
