@@ -1,0 +1,10 @@
+{
+  "name":  "assign_call",
+  "note":  "A binding whose right-hand side is a builtin that could not compute leaves the body undefined. Builtins use nil for 'could not compute', never as a value, so binding it would make `n != 0` hold where OPA denies. Verified against `opa eval`: [1,2] true, [] false, absent false.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if {\n\tn := count(input.items)\n\tn != 0\n}\n",
+  "cases": [
+    { "input": { "items": [1, 2] }, "expected": 1 },
+    { "input": { "items": [] },     "expected": 0 },
+    { "input": {},                  "expected": 0 }
+  ]
+}

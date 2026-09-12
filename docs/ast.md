@@ -154,6 +154,8 @@ Reaching it takes defining `f()`, never calling it (the call site is refused as 
 
 A binding whose value is *undefined* makes the body undefined, so the rule does not hold -- binding null instead would let `x := input.missing` compare equal to another missing field and quietly succeed. An explicit JSON `null` is a different thing and does bind: zopa spells both with `Value.nil` internally, but `role := input.user.role` where role is `null` binds and the body continues, matching OPA.
 
+Which of the two a `nil` means depends on the right-hand side. A `value` literal is the only form that can legitimately be null. A `ref` reports a missing path distinctly. Everything else -- a builtin `call`, a comparison, an iterator -- yields `nil` only when it could not compute an answer, so `n := count(input.missing)` leaves the body undefined rather than binding nil and letting `n != 0` hold.
+
 A name may be bound **once per scope**. Binding it twice in one body is `error.DuplicateAssignment`, matching OPA, which refuses `x := 1; x := 2` at compile time with `rego_compile_error: var x assigned above`. The same name inside a nested `some` body is a different scope and is fine. A binding never escapes its own rule body.
 
 Only meaningful as a body statement. A body that ends in one still holds, matching Rego (`allow if { x := 1 }` is true), but nested where there is nothing to scope over -- inside `not`, or as the body of a `some` -- it is `error.AssignOutsideBody`, which surfaces as `-1` and denies. Destructuring targets (`[a, b] := ...`) are not supported; `tools/rego2ast.py` refuses them.
