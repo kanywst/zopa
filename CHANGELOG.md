@@ -4,6 +4,10 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+### Added
+
+- **Cedar joins the benchmark.** An earlier note in `bench/README.md` said no first-party Cedar binding was reachable from Node without adding a dependency. That was wrong: `@cedar-policy/cedar-wasm` is published by the Cedar project and runs under `node` directly. The engine resolves it at run time and skips itself, by name, when it is absent -- nothing is vendored and this repository still has no `package.json`. `03_rbac` gained a Cedar policy so the comparison covers the realistic fixture too, and the agreement gate holds Cedar to the same decision as every other engine. The policy set is preparsed through `statefulIsAuthorized`, the fair analogue of `zopa-compiled` and OPA's prebuilt wasm; charging Cedar a policy parse per decision would be the unfairness this harness already avoids for OPA. The resulting number is dominated by the wasm-bindgen serialisation boundary rather than Cedar's evaluator, and both READMEs say so rather than letting the row be misread.
+
 ## [0.4.0] - 2026-09-12
 
 A minor bump: the generic ABI gains a compiled-policy path, which is additive, but it changes what the fast way to drive zopa is. Nothing existing breaks -- `evaluate`, `evaluate_target` and `evaluate_addressed` are untouched.

@@ -95,6 +95,12 @@ jobs:
       # sub-microsecond p99 meaningfully. This asserts every engine still
       # builds, runs, and agrees. Publishable numbers come from `zig build
       # bench` on a quiet machine.
+      # Not vendored and not in a package.json: the harness resolves it
+      # at run time and skips itself if absent. Installed here so the
+      # agreement gate actually covers Cedar on every PR.
+      - name: install cedar
+        run: npm i --no-save @cedar-policy/cedar-wasm@4.12.0
+
       - name: bench (smoke)
         run: zig build bench -- --quick --json=bench-smoke.json
 

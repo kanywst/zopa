@@ -18,6 +18,7 @@ bench/
     zopa-compiled.mjs  `policy_compile` once, then `evaluate_compiled(handle, input)`
     opa-wasm.mjs       `opa build -t wasm` + the opa_eval fast path
     opa-http.mjs       `opa run --server` over loopback HTTP
+    cedar.mjs          `@cedar-policy/cedar-wasm`, policy set preparsed
   fixtures/
     01_static.json       literal allow:true
     02_header_eq.json    input.method == "GET"
@@ -26,7 +27,7 @@ bench/
   README.md
 ```
 
-Each fixture is a JSON object with `name`, `input`, `ast`, and — when the policy has a readable Rego equivalent — `rego`. Fixtures without `rego` are zopa-only by construction and are skipped for the other engines rather than guessed at. `04_deep_nest` is one: there is no natural Rego that compiles to 24 levels of expression nesting.
+Each fixture is a JSON object with `name`, `input`, `ast`, and — when the policy has a readable equivalent in that language — `rego` and `cedar`. Fixtures missing one are skipped for the engines that need it rather than guessed at: writing a policy on the fly from the AST would be inventing a semantic mapping, and the agreement gate exists precisely so nothing is invented. `04_deep_nest` has neither; there is no natural Rego or Cedar that compiles to 24 levels of expression nesting.
 
 ## Running
 
@@ -46,7 +47,13 @@ node bench/run.mjs --engines=zopa,opa-wasm  # subset
 node bench/run.mjs --json=bench/results/local.json
 ```
 
-The OPA engines need an `opa` CLI on `PATH`. Without one they are **skipped and named**, and the run still reports zopa — so `zig build bench` does something useful on a machine that has never heard of OPA. No npm dependency is involved: the OPA WASM ABI is bound directly in `engines/opa-wasm.mjs`, because adding a package manager to compare against would make the benchmark harder to run than the thing it measures.
+The OPA engines need an `opa` CLI on `PATH`; Cedar needs `@cedar-policy/cedar-wasm` resolvable from this directory:
+
+```bash
+npm i --no-save @cedar-policy/cedar-wasm
+```
+
+Anything missing is **skipped and named**, and the run still reports whatever is available — so `zig build bench` does something useful on a machine that has never heard of either. Nothing is vendored and this repository still has no `package.json`: the OPA WASM ABI is bound directly in `engines/opa-wasm.mjs`, and Cedar resolves at run time or skips.
 
 ## Metrics
 
@@ -59,16 +66,16 @@ The OPA engines need an `opa` CLI on `PATH`. Without one they are **skipped and 
 
 ## What the numbers said when this landed
 
-Apple M-series laptop, Node 26, OPA 1.20.2, `--release=small`. Reproduce with `zig build bench`; treat the absolute values as machine-specific and the ratios as the result.
+Apple M-series laptop, Node 26, OPA 1.20.2, Cedar 4.12.0, `--release=small`. Reproduce with `zig build bench`; treat the absolute values as machine-specific and the ratios as the result.
 
 Per-decision cost, microseconds (`amort`):
 
-| fixture | zopa (evaluate) | zopa (compiled) | OPA (wasm) | OPA (HTTP sidecar) |
-| --- | --- | --- | --- | --- |
-| `01_static` | 0.36 | **0.08** | 0.82 | 138 |
-| `02_header_eq` | 0.97 | **0.19** | 0.96 | 132 |
-| `03_rbac` | 5.76 | **1.32** | 2.24 | 149 |
-| `04_deep_nest` | 5.87 | **0.35** | — | — |
+| fixture | zopa (evaluate) | zopa (compiled) | OPA (wasm) | Cedar (wasm) | OPA (HTTP sidecar) |
+| --- | --- | --- | --- | --- | --- |
+| `01_static` | 0.34 | **0.08** | 1.27 | 13.0 | 176 |
+| `02_header_eq` | 1.05 | **0.21** | 1.09 | 15.7 | 171 |
+| `03_rbac` | 7.20 | **1.57** | 2.52 | 77.2 | 183 |
+| `04_deep_nest` | 8.60 | **0.57** | — | — | — |
 
 Footprint and start-up:
 
@@ -78,15 +85,16 @@ Footprint and start-up:
 | memory after warm-up | 1.3–1.6 MiB | **128 KiB** | 23 MiB |
 | cold start | **0.4 ms** | 0.5 ms | 30–60 ms |
 
-Four things to take from that, including the one that does not favour zopa:
+Five things to take from that, including the one that does not favour zopa:
 
-1. **Handing the policy over on every call is most of the cost.** The gap between the two zopa rows is exactly what the AST parse and build cost, because nothing else differs between them: 4.4 µs of the 5.76 on `03_rbac`, and 5.5 µs of the 5.87 on `04_deep_nest`, where the AST is deep and the rule walk is trivial. If you are driving the same policy across requests and using `evaluate`, that is what you are paying for the convenience.
-2. **With the policy held, zopa is faster than OPA's wasm build on every fixture** — 1.32 µs against 2.24 on the realistic RBAC policy, where the one-shot path lost at 5.76. The earlier revision of this file predicted exactly this and could not demonstrate it, because no export took a pre-built policy. `policy_compile` / `evaluate_compiled` is that export.
-3. **Both in-process engines beat the sidecar by two orders of magnitude.** This is the claim zopa was built on and it holds with room to spare. It is also the least surprising row: it measures a loopback TCP round trip against a function call.
-4. **zopa holds more WASM memory than OPA's module does** — about 1.4–1.6 MiB against 128 KiB. That is the arena working as designed: it is reset with `.retain_capacity` after every request so `memory.grow` stops firing once warm, trading a steady-state floor for never allocating again. OPA rewinds its heap pointer instead. Against the sidecar's 23 MiB both are rounding errors, but "smaller binary" does not imply "smaller runtime footprint" and the table should not be read as if it did.
+1. **Handing the policy over on every call is most of the cost.** The gap between the two zopa rows is exactly what the AST parse and build cost, because nothing else differs between them. If you drive the same policy across requests through `evaluate`, that is what you are paying for the convenience.
+2. **With the policy held, zopa is faster than OPA's wasm build on every fixture** — 1.57 µs against 2.52 on the realistic RBAC policy, where the one-shot path lost. An earlier revision of this file predicted exactly this and could not demonstrate it, because no export took a pre-built policy. `policy_compile` / `evaluate_compiled` is that export.
+3. **Both in-process wasm engines beat the sidecar by two orders of magnitude.** This is the claim zopa was built on and it holds with room to spare. It is also the least surprising row: it measures a loopback TCP round trip against a function call.
+4. **The Cedar row is not a verdict on Cedar.** Its policy set is preparsed via `statefulIsAuthorized`, so this is not a policy-parse cost — preparsing takes it from ~60 µs to ~29 µs on the simplest fixture, and the rest stays. What is left is mostly the wasm-bindgen boundary: every call serialises principal, action, resource, context and entities in and an answer out. This measures Cedar *through its WASM binding*, which is the only way to reach it from Node, and a native embedding would look different. It is in the table because the README's comparison names Cedar and because leaving it out was the easier, less honest option.
+5. **zopa holds more WASM memory than OPA's module does** — about 1.4–1.6 MiB against 128 KiB. That is the arena working as designed: it is reset with `.retain_capacity` after every request so `memory.grow` stops firing once warm, trading a steady-state floor for never allocating again. OPA rewinds its heap pointer instead. Against the sidecar's 23 MiB both are rounding errors, but "smaller binary" does not imply "smaller runtime footprint" and the table should not be read as if it did.
 
 ## Not measured
 
-- **Cedar.** The proposal lists it as a native baseline with no proxy-wasm path. There is no first-party Cedar binding reachable from Node without adding a dependency, and a Rust harness for one engine would mean maintaining two harnesses. Deferred deliberately, not forgotten.
+- **Cedar natively.** The Cedar row goes through `@cedar-policy/cedar-wasm`, which is first-party but is a WASM binding; the serialisation boundary dominates it. A `cedar-policy` embedding in Rust would measure the evaluator instead, at the cost of a second harness in a second language for one engine. Not worth it yet, and the row is labelled rather than left to be misread.
 - **The in-Envoy path.** These numbers are single-process and CPU-bound; the proxy-wasm path adds host calls and header serialisation. The `zopa (compiled)` row is the closest proxy of the two, since it does the same per-request work the shim does — input parse plus rule walk against a policy built at configure time. See `examples/envoy/`.
 - **Concurrency.** `ops/s` is one sequential caller. A saturation number across many in-flight requests would say more about the sidecar than about the engines, and it is the sidecar row that is already unambiguous.
