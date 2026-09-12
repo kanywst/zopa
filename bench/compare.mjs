@@ -56,8 +56,27 @@ function ratios(run) {
 const run = JSON.parse(readFileSync(argv[2], 'utf8'));
 const current = ratios(run);
 
+// Both branches need this, not just the compare one. Seeding from a run
+// where `zopa-compiled` did not build would emit a valid-looking
+// baseline with an empty `ratios` object and exit 0 -- a document with
+// its teeth removed, which the next CI run would report as "nothing was
+// compared" long after the cause. Same fail-open shape, other branch.
+if (!run.engines.includes(REFERENCE)) {
+  console.error(
+    `${REFERENCE} did not run, so there is nothing to compare against.\n`
+    + `engines in this run: ${run.engines.join(', ') || '(none)'}`,
+  );
+  exit(1);
+}
+
 if (argv[3] === undefined) {
   // No baseline: emit one. Used to seed bench/results/baseline.json.
+  if (Object.keys(current).length === 0) {
+    console.error(
+      `${REFERENCE} ran but produced no comparable cost on any fixture; refusing to seed an empty baseline.`,
+    );
+    exit(1);
+  }
   console.log(JSON.stringify({
     note: `Ratio of each engine's amortised cost to ${REFERENCE} on the same run. `
         + 'Absolute microseconds are deliberately not stored: they are machine-specific '
@@ -76,19 +95,6 @@ const baseline = JSON.parse(readFileSync(argv[3], 'utf8'));
 // effect rather than sitting in the file looking authoritative while
 // the constant below decides.
 const threshold = typeof baseline.threshold === 'number' ? baseline.threshold : THRESHOLD;
-
-// A gate that reports success when it compared nothing is worse than no
-// gate: `zopa-compiled` is only demoted to a SKIPPED line by the
-// harness, so a stale wasm without `policy_compile`, an instantiate
-// error, or a wrong path would leave every ratio unmeasurable and this
-// script would have printed "no regression" and exited 0.
-if (!run.engines.includes(REFERENCE)) {
-  console.error(
-    `${REFERENCE} did not run, so there is nothing to compare against.\n`
-    + `engines in this run: ${run.engines.join(', ') || '(none)'}`,
-  );
-  exit(1);
-}
 
 let failures = 0;
 let compared = 0;

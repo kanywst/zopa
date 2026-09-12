@@ -79,6 +79,27 @@ test('does not fire when zopa gets faster', () => {
   assert.equal(r.code, 0, r.stderr);
 });
 
+test('refuses to seed a baseline when the reference engine did not run', () => {
+  // The seed branch needs the same guard as the compare branch: without
+  // it this emits a valid-looking baseline with an empty ratios object
+  // and exits 0, and the failure surfaces on some later CI run far from
+  // the cause.
+  const without = run(
+    [{ fixture: 'f1', engine: 'opa-wasm', amortizedMicros: 4 }],
+    ['zopa', 'opa-wasm'],
+  );
+  const r = compare(without);
+  assert.equal(r.code, 1, 'seeding without the reference engine must not report success');
+  assert.match(r.stderr, /did not run/);
+});
+
+test('refuses to seed a baseline with no comparable costs', () => {
+  // Reference present but its cost unusable on every fixture.
+  const r = compare(run(rows(Infinity, 4)));
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /refusing to seed an empty baseline/);
+});
+
 test('fails closed when the reference engine did not run', () => {
   const baseline = JSON.parse(compare(run(rows(1, 4))).stdout);
   const without = run(

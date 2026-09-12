@@ -79,6 +79,15 @@ def walk_rule(rule: dict[str, Any]) -> dict[str, Any]:
     # without this the parameter converts into a bare ref that resolves
     # against the input document instead of a binding, so `f(x)` would
     # silently become a test on `input.x`.
+    #
+    # A *nullary* definition, `f() if ...`, is not detectable here and
+    # is not guarded: OPA emits a head byte-identical to the plain rule
+    # `f if ...` -- no `args` key on either -- so there is nothing to
+    # branch on. It converts into a rule named `f`, addressable as data
+    # where OPA's function is not. Reaching that requires defining
+    # `f()`, never calling it (the call site is refused as an
+    # unsupported call), then targeting `f` directly. Recorded in
+    # docs/ast.md and pinned by a test rather than papered over.
     if head.get("args"):
         raise Unsupported(
             f"function definition `{name}` not supported: "

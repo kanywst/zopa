@@ -266,3 +266,9 @@ jobs:
       # construct quietly starting or stopping shows up as a diff.
       - name: zig build test-coverage
         run: zig build test-coverage
+
+      # tools/sbom-annotate.sh decides whether a release ships. Tested
+      # here rather than only at tag time, which is the most expensive
+      # place to discover a broken jq filter.
+      - name: test the sbom annotator
+        run: python3 test/sbom_annotate_test.py

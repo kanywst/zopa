@@ -138,6 +138,12 @@ An index that is negative, fractional, or not a number is rejected when the AST 
 
 A missing path is *undefined*, treated as `false` in body position -- deny-by-default. That covers an index past the end of an array and an index into something that is not an array, both of which Rego also calls undefined.
 
+### Known conversion limitation: nullary functions
+
+`tools/rego2ast.py` refuses function definitions, because a parameter would convert into a bare ref that resolves against the input document rather than binding. It cannot refuse the nullary spelling: OPA emits a head byte-identical for `f() if ...` and `f if ...` -- neither carries an `args` key -- so there is nothing to branch on. `f() if ...` therefore converts into a rule named `f`, which zopa makes addressable where OPA's function is not.
+
+Reaching it takes defining `f()`, never calling it (the call site is refused as an unsupported call), and then targeting `f` directly. Recorded here rather than left to be discovered, and pinned by a test that fails if OPA ever starts distinguishing the two.
+
 ### `compare` -- binary comparison
 
 ```json

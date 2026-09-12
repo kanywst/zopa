@@ -4,6 +4,17 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+### Fixed
+
+- **The SBOM step never checked what it scanned.** Its hash guard proves the document names the right artifact and says nothing about how it was produced -- so an input rename in a future `sbom-action`, or an accidental default to the workspace, would publish the ~60 Actions and `.zig-cache` false positives the whole design exists to avoid, with every other check still passing. It now asserts zero dependency components (which is the answer, since `build.zig.zon` declares none) and prints what it found when that fails. The Apache-2.0 claim is checked against `LICENSE` rather than trusted from a literal, so a licence change cannot leave a false statement in a signed document. `file:` was also verified to be a real input of `anchore/sbom-action` at the pinned commit, not silently ignored.
+- **The jq that decides whether a release ships had no test.** It lived inline in a workflow `run:` block, where nothing could exercise it short of pushing a tag. It is now `tools/sbom-annotate.sh`, covered by `test/sbom_annotate_test.py` for both CycloneDX `tools` shapes and each condition it refuses on, run in CI. `shellcheck` was scoped to `examples/` and so had never seen it; it now scans the repository.
+- **The benchmark baseline could be seeded empty.** The compare path refused a run without the reference engine; the seed path did not, so re-seeding from a run where `zopa-compiled` failed to build would emit a valid-looking baseline with an empty `ratios` object and exit 0 -- the same fail-open, on the other branch of the same script, surfacing much later as "nothing was compared".
+
+### Changed
+
+- **Two conformance fixtures claimed more than they pin.** `12_partial_set` and `13_partial_object` verify that the construct is refused end to end; they cannot verify that the dropped set or key would be caught by a decision, because zopa has no complete rule that could hold one. Their notes say so now. `with` and `else` have fixtures that do discriminate.
+- **A nullary function definition is a recorded limitation.** `f() if ...` and `f if ...` produce byte-identical heads in OPA's AST -- neither carries `args` -- so the guard on function definitions cannot see the nullary case, and it converts into a rule named `f`. Documented in `docs/ast.md` and pinned by a test that fails if OPA ever distinguishes them.
+
 ### Added
 
 - **Array indices in ref paths.** `input.groups[1].name` now converts and evaluates; a `ref` path segment is a JSON string for a member lookup or a non-negative whole number for an index. This was the most-used Rego idiom zopa could not express -- `zig build test-coverage` goes from 32/48 to 34/49.
