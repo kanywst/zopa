@@ -93,6 +93,8 @@ CORPUS: list[tuple[str, str, str]] = [
     ("comp/set", "set comprehension", "allow if count({x | some x in input.xs}) == 1"),
     ("func/user-defined", "user-defined function",
      "allow if f(input.x)\n\nf(x) if x == 1"),
+    ("func/definition-only", "function definition on its own", "f(x) if x == 1"),
+    ("rule/else", "`else` fallback branch", "allow if input.x == 1 else = false if input.y == 2"),
     ("misc/with", "the `with` modifier", "allow if input.x == 1 with input.y as 2"),
     ("misc/partial-set", "partial set rule", 'deny contains "x" if input.x == 1'),
     ("misc/partial-object", "partial object rule", "p[input.x] = input.y if input.x == 1"),
@@ -124,10 +126,13 @@ def convert(rego: str) -> tuple[bool, str]:
     except FileNotFoundError:
         sys.exit("coverage: no `opa` on PATH")
     if parsed.returncode != 0:
-        # The policy does not compile at all -- a corpus bug, not a
-        # converter gap, and saying so keeps the two apart.
+        # The policy does not compile at all. That is a corpus bug --
+        # a typo in a row, or an `opa` grammar change under us -- not a
+        # converter gap, and recording it as "does not convert" would
+        # quietly shrink the reach number the README cites. Marked like
+        # a crash so it fails the run rather than resting in the table.
         first = (parsed.stderr or "").strip().splitlines()
-        return False, f"rego did not parse: {first[0] if first else '?'}"
+        return False, f"CRASH: rego did not parse: {first[0] if first else '?'}"
 
     converted = subprocess.run(
         [sys.executable, str(REGO2AST)],
@@ -156,6 +161,8 @@ def main() -> int:
         details[key] = (label, detail)
 
     supported = sum(1 for v in results.values() if v)
+    # Both a converter traceback and a corpus policy that will not
+    # compile: neither is a real answer about reach.
     crashes = sorted(k for k, (_, d) in details.items() if d.startswith("CRASH:"))
 
     if args.json:
@@ -178,7 +185,8 @@ def main() -> int:
         for key in crashes:
             print(f"\nCRASH  {key}: {details[key][1]}", file=sys.stderr)
         print(
-            "\nrego2ast must answer with an AST or a described refusal, never a traceback.",
+            "\nEvery row must be a real answer: rego2ast returns an AST or a described\n"
+            "refusal, and every corpus policy must compile. Neither is a reach result.",
             file=sys.stderr,
         )
         return 1

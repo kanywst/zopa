@@ -65,6 +65,16 @@ class Refusals(unittest.TestCase):
             "allow if {\n\tsome x in input.xs\n\tx == 1\n}", "standalone `some ... in`",
         )
 
+    def test_else_chain_says_the_branch_would_be_dropped(self):
+        self.assertRefused(
+            "allow if input.x == 1 else = false if input.y == 2", "`else` on rule `allow`",
+        )
+
+    def test_function_definition_is_refused(self):
+        # The call site was already caught; the definition converted
+        # into a rule whose parameter resolved against the input.
+        self.assertRefused("f(x) if x == 1", "function definition `f`")
+
     def test_unnamed_operator_is_described(self):
         # `in` reaches OPA's AST as internal.member_2 and has no bare
         # name; reporting an empty one tells the reader nothing.

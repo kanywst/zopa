@@ -1,0 +1,13 @@
+{
+  "name": "else_chain",
+  "note": "The fallback branch is the one that allows here, and the first branch fails for this input -- so OPA allows and a converter that dropped the `else` denies. Fails rather than skips if the drop returns.",
+  "rego": "package authz\n\nallow if input.x == 1 else = true if input.y == 2\n",
+  "cases": [
+    {
+      "input": {
+        "y": 2
+      },
+      "expected": 1
+    }
+  ]
+}

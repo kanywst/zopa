@@ -59,6 +59,27 @@ def walk_rule(rule: dict[str, Any]) -> dict[str, Any]:
     head = rule["head"]
     name = head["name"]
 
+    # `allow if a else = false if b` is one Rule whose head and body
+    # cover the first branch only; the fallback hangs off `rule["else"]`
+    # as another Rule, chainable further. Nothing here reads it, so
+    # converting would emit the first condition alone -- dropping a deny
+    # path or an allow path depending on which branch was the fallback.
+    if rule.get("else") is not None:
+        raise Unsupported(
+            f"`else` on rule `{name}` not supported: the fallback branch would be dropped"
+        )
+
+    # A function definition -- `f(x) if x == 1` -- carries its
+    # parameters in `head["args"]`. zopa rules take no arguments, and
+    # without this the parameter converts into a bare ref that resolves
+    # against the input document instead of a binding, so `f(x)` would
+    # silently become a test on `input.x`.
+    if head.get("args"):
+        raise Unsupported(
+            f"function definition `{name}` not supported: "
+            "zopa rules take no parameters, so the arguments would resolve against the input"
+        )
+
     # A partial rule builds a collection across every definition that
     # holds: `deny contains msg if ...` a set, `p[k] = v if ...` an
     # object. zopa rules are complete -- one name, one value -- so
