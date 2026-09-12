@@ -66,10 +66,29 @@ if (argv[3] === undefined) {
 }
 
 const baseline = JSON.parse(readFileSync(argv[3], 'utf8'));
+
+// The stored threshold wins, so re-seeding with a different one takes
+// effect rather than sitting in the file looking authoritative while
+// the constant below decides.
+const threshold = typeof baseline.threshold === 'number' ? baseline.threshold : THRESHOLD;
+
+// A gate that reports success when it compared nothing is worse than no
+// gate: `zopa-compiled` is only demoted to a SKIPPED line by the
+// harness, so a stale wasm without `policy_compile`, an instantiate
+// error, or a wrong path would leave every ratio unmeasurable and this
+// script would have printed "no regression" and exited 0.
+if (!run.engines.includes(REFERENCE)) {
+  console.error(
+    `${REFERENCE} did not run, so there is nothing to compare against.\n`
+    + `engines in this run: ${run.engines.join(', ') || '(none)'}`,
+  );
+  exit(1);
+}
+
 let failures = 0;
 let compared = 0;
 
-console.log(`ratio of each engine to ${REFERENCE}, current vs baseline (gate: ${THRESHOLD}x)\n`);
+console.log(`ratio of each engine to ${REFERENCE}, current vs baseline (gate: ${threshold}x)\n`);
 console.log(`${'fixture/engine'.padEnd(30)}| baseline |  current | change`);
 console.log(`${'-'.repeat(30)}+----------+----------+-------`);
 
@@ -86,7 +105,7 @@ for (const [key, was] of Object.entries(baseline.ratios)) {
   // ground relative to that engine, which is the regression this
   // watches for.
   const change = was / now;
-  const bad = change > THRESHOLD;
+  const bad = change > threshold;
   if (bad) failures++;
   console.log(
     `${key.padEnd(30)}| ${was.toFixed(2).padStart(8)} | ${now.toFixed(2).padStart(8)} | ${
@@ -95,9 +114,22 @@ for (const [key, was] of Object.entries(baseline.ratios)) {
 }
 
 console.log(`\n${compared} ratio(s) compared`);
+
+// Every ratio going missing while the reference engine did run means
+// the fixture set or the engine list moved out from under the baseline.
+// Re-seed deliberately; do not let it pass silently.
+if (compared === 0) {
+  console.error(
+    '\nnothing was compared: the baseline and this run share no fixture/engine pair.\n'
+    + 'Re-seed the baseline if that is intended:\n'
+    + '  zig build bench -- --json=run.json && node bench/compare.mjs run.json > bench/results/baseline.json',
+  );
+  exit(1);
+}
+
 if (failures > 0) {
   console.error(
-    `\n${failures} regression(s): zopa lost more than ${THRESHOLD}x of ground against another engine.\n`
+    `\n${failures} regression(s): zopa lost more than ${threshold}x of ground against another engine.\n`
     + 'If this is intended, re-seed the baseline:\n'
     + '  zig build bench -- --json=run.json && node bench/compare.mjs run.json > bench/results/baseline.json',
   );
