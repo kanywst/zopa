@@ -78,6 +78,15 @@ class Refusals(unittest.TestCase):
     def test_negative_array_index_is_refused(self):
         self.assertRefused("allow if input.xs[-1] == 1", "whole non-negative number")
 
+    def test_oversized_array_index_is_described_here_not_downstream(self):
+        # Python ints are unbounded; ast.zig caps at 2**32-1. Without a
+        # matching check the converter would emit a path the module
+        # refuses as a bare InvalidPath, the one rejection in the walker
+        # without a reason attached.
+        self.assertRefused(
+            "allow if input.xs[99999999999999999999] == 1", "above the maximum zopa accepts",
+        )
+
     def test_unnamed_operator_is_described(self):
         # `in` reaches OPA's AST as internal.member_2 and has no bare
         # name; reporting an empty one tells the reader nothing.
@@ -101,6 +110,12 @@ class Conversions(unittest.TestCase):
     def test_default_rule(self):
         ast = self.assertConverts("default allow = false")
         self.assertTrue(ast["rules"][0]["default"])
+
+    def test_largest_accepted_array_index_still_converts(self):
+        # The ceiling itself converts, so the refusal beside it is a
+        # bound rather than an off-by-one swallowing valid indices.
+        ast = self.assertConverts("allow if input.xs[4294967295] == 1")
+        self.assertEqual(ast["rules"][0]["body"][0]["left"]["path"][-1], 4294967295)
 
     def test_array_index_becomes_a_numeric_segment(self):
         ast = self.assertConverts('allow if input.groups[1].name == "ops"')
