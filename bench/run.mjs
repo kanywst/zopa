@@ -50,8 +50,8 @@ const opts = parseArgs(process.argv.slice(2));
 // agrees and still runs, without spending minutes to sharpen a p99 that
 // a shared runner cannot measure meaningfully anyway.
 const BUDGET = opts.quick
-  ? { warmup: 50, iters: 300, throughputMs: 100 }
-  : { warmup: 1000, iters: 10_000, throughputMs: 1000 };
+  ? { warmup: 50, iters: 300, throughputMs: 150, throughputRuns: 3 }
+  : { warmup: 1000, iters: 10_000, throughputMs: 1500, throughputRuns: 5 };
 
 // -------------------------------------------------------------- stats
 
@@ -114,15 +114,28 @@ async function latency(engine, mod) {
 // Saturation for a single caller: how many sequential decisions fit in
 // the window. For the in-process engines that is a CPU-bound loop; for
 // the sidecar it is bounded by the round trip, which is the point.
+//
+// Best of several short windows rather than one long one. A single
+// window that happens to catch a GC pause or the OS scheduling
+// something else reports a number well below what the engine can do,
+// and at sub-microsecond costs one pause dominates: an early revision
+// of this harness measured zopa-compiled at 3.84 us amortised against a
+// 1.38 us p50 on the same run, which is interference, not the engine.
+// The best window is the one with the least of that in it.
 async function throughput(engine, mod) {
-  const deadline = process.hrtime.bigint() + BigInt(BUDGET.throughputMs) * 1_000_000n;
-  let n = 0;
-  if (mod.isAsync) {
-    while (process.hrtime.bigint() < deadline) { await engine.decide(); n++; }
-  } else {
-    while (process.hrtime.bigint() < deadline) { engine.decide(); n++; }
+  const windowMs = Math.max(1, Math.round(BUDGET.throughputMs / BUDGET.throughputRuns));
+  let best = 0;
+  for (let run = 0; run < BUDGET.throughputRuns; run++) {
+    const deadline = process.hrtime.bigint() + BigInt(windowMs) * 1_000_000n;
+    let n = 0;
+    if (mod.isAsync) {
+      while (process.hrtime.bigint() < deadline) { await engine.decide(); n++; }
+    } else {
+      while (process.hrtime.bigint() < deadline) { engine.decide(); n++; }
+    }
+    best = Math.max(best, (n * 1000) / windowMs);
   }
-  return (n * 1000) / BUDGET.throughputMs;
+  return best;
 }
 
 // Cold start is a fresh setup plus the first decision: for wasm that is

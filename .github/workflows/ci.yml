@@ -117,6 +117,16 @@ jobs:
       - name: bench (smoke)
         run: zig build bench -- --quick --json=bench-smoke.json
 
+      # The absolute microseconds a shared runner produces are not worth
+      # publishing -- bench/README.md says so and it is still true. What
+      # they support is a ratio between engines measured in the same
+      # process on the same run, which survives a runner that is simply
+      # slow today. The gate is wide on purpose: it exists to catch
+      # something like a per-request policy parse creeping back into the
+      # compiled path, not to police a few percent of drift.
+      - name: check for a performance regression
+        run: node bench/compare.mjs bench-smoke.json bench/results/baseline.json
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

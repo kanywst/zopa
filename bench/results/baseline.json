@@ -1,0 +1,21 @@
+{
+  "note": "Ratio of each engine's amortised cost to zopa-compiled on the same run. Absolute microseconds are deliberately not stored: they are machine-specific and a CI runner cannot measure them meaningfully. Ratios survive a slow runner.",
+  "reference": "zopa-compiled",
+  "threshold": 1.5,
+  "generated": "2026-09-12T07:03:37.205Z",
+  "ratios": {
+    "01_static/zopa": 3.8374659361298833,
+    "01_static/opa-wasm": 10.192235772979757,
+    "01_static/opa-http": 1503.5503386004516,
+    "01_static/cedar": 126.25536431875048,
+    "02_header_eq/zopa": 4.578457625068252,
+    "02_header_eq/opa-wasm": 4.61374104654151,
+    "02_header_eq/opa-http": 612.5699912510936,
+    "02_header_eq/cedar": 68.52965645492806,
+    "03_rbac/zopa": 4.030813294119909,
+    "03_rbac/opa-wasm": 1.578351159517376,
+    "03_rbac/opa-http": 108.70658372213582,
+    "03_rbac/cedar": 37.67427236794826,
+    "04_deep_nest/zopa": 15.549314147922681
+  }
+}
