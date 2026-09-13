@@ -25,6 +25,26 @@ pub const default_request_rule: []const u8 = "allow";
 pub const default_body_rule: []const u8 = "allow_body";
 pub const default_response_rule: []const u8 = "allow_response";
 
+/// Which of the two configuration shapes a document is.
+///
+/// Historically the whole plugin configuration *is* the policy AST. A
+/// document carrying a `policy` member is the wrapper that can also
+/// name targets. No AST node has a top-level `policy`, so the two
+/// cannot be confused.
+///
+/// A bare AST carrying a top-level `targets` is refused rather than
+/// treated as either. `ast.buildModulesBundle` ignores members it does
+/// not know, so such a document would otherwise parse fine, take the
+/// defaults, and never read the targets the author wrote -- a
+/// misconfiguration that changes what the filter enforces and says
+/// nothing.
+pub fn shapeOf(config: json.Value) Error!?json.Value {
+    if (config != .object) return null;
+    if (json.lookupMember(config.object, "policy")) |policy| return policy;
+    if (json.lookupMember(config.object, "targets") != null) return error.TargetsWithoutPolicyWrapper;
+    return null;
+}
+
 /// One `(package, rule)` pair a phase evaluates, and what a deny does.
 ///
 /// Without a `targets` block the shim evaluates exactly one rule per
@@ -49,6 +69,7 @@ pub const Set = struct {
 
 pub const Error = error{
     NoEnforcingRequestTarget,
+    TargetsWithoutPolicyWrapper,
     UnknownPhase,
     UnknownOnDeny,
     TargetRuleMissing,
@@ -299,4 +320,38 @@ test "targets: no block reproduces the pre-targets arrangement" {
     try testing.expectEqual(@as(usize, 1), b.body.len);
     try testing.expectEqualStrings(default_body_rule, b.body[0].rule);
     try testing.expectEqual(@as(usize, 1), b.response.len);
+}
+
+test "targets: a bare AST carrying `targets` is refused, not silently ignored" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // `ast.buildModulesBundle` ignores members it does not know, so
+    // without this the document parses, takes the defaults, and never
+    // reads the targets the author wrote -- a misconfiguration that
+    // changes what the filter enforces and says nothing.
+    const bare_with_targets = try json.parse(allocator,
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","value":{"type":"value","value":true}}],
+        \\ "targets":[{"phase":"request","package":"","rule":"allow"}]}
+    );
+    try testing.expectError(Error.TargetsWithoutPolicyWrapper, shapeOf(bare_with_targets));
+
+    // A plain AST is the historical shape and stays one.
+    const bare = try json.parse(allocator,
+        \\{"type":"module","rules":[{"type":"rule","name":"allow","value":{"type":"value","value":true}}]}
+    );
+    try testing.expectEqual(@as(?json.Value, null), try shapeOf(bare));
+
+    // The wrapper hands back the policy it carries.
+    const wrapped = try json.parse(allocator,
+        \\{"policy":{"type":"module","rules":[]},"targets":[]}
+    );
+    const policy = try shapeOf(wrapped);
+    try testing.expect(policy != null);
+    try testing.expect(policy.? == .object);
+
+    // A non-object configuration is not a wrapper; the AST builder
+    // rejects it on its own terms.
+    try testing.expectEqual(@as(?json.Value, null), try shapeOf(try json.parse(allocator, "[]")));
 }
