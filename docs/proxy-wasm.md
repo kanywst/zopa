@@ -120,7 +120,9 @@ Without a `targets` block the shim behaves exactly as every release before this 
 
 **A targets block must name at least one enforcing request-phase target.** The request phase has no existence gate the way body and response do -- it always runs -- so an empty list would make the phase allow from an empty loop and let every request through, configured-looking and silent. `{"targets": []}` alone would have disabled authorization. A filter that only inspects bodies is a reasonable thing to want, but it has to say so by naming a request rule that allows, rather than getting the same effect by omission.
 
-A truncated request body is refused if *any* body target reads the body, not just the first -- otherwise a second target could read it unprotected.
+A truncated request body is refused if any **enforcing** body target reads the body -- not just the first, since another could otherwise read it unprotected.
+
+Advisory body targets deliberately do not raise that gate. The gate denies the whole request, and an advisory target must never be able to do that, so adding an audit rule cannot start rejecting oversized bodies that were previously fine. The cost is that an advisory rule may be evaluated against a truncated body and decide on a prefix: an incomplete audit trail, which is the same trade every other advisory path makes.
 
 ## Imports
 
