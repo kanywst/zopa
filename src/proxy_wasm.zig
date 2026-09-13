@@ -293,6 +293,19 @@ fn compilePolicy(policy_bytes: []const u8) bool {
     // one target's class would let another read the body unprotected.
     body_class = .no_body_refs;
     for (targets.body) |t| {
+        // Enforcing targets only. The truncation gate turns a class
+        // above `no_body_refs` into a 403 for the whole request, and an
+        // advisory target must not be able to do that -- the contract
+        // is that it never blocks. Letting one raise the class meant
+        // adding an audit rule silently started rejecting oversized
+        // bodies that were previously fine.
+        //
+        // The cost is that an advisory rule can be evaluated against a
+        // truncated body and reach a decision based on a prefix. That
+        // is an incomplete audit trail, which is the same trade every
+        // other advisory path here makes: a broken audit is not a
+        // reason to reject traffic.
+        if (!t.enforce) continue;
         const class = body_deps.analyzeTarget(bundle, t.package, t.rule).class;
         body_class = switch (class) {
             .full_tree => .full_tree,
