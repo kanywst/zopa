@@ -356,6 +356,11 @@ check_rejected envoy-targets-bad-empty.yaml          "empty targets list -> refu
 check_rejected envoy-targets-bad-unknown-phase.yaml  "unknown phase -> refused"
 check_rejected envoy-targets-bad-unknown-on-deny.yaml "unknown on_deny -> refused"
 check_rejected envoy-targets-bad-missing-rule.yaml   "target names a missing rule -> refused"
+# A bare AST carrying `targets` with no `policy` wrapper: the AST
+# builder ignores members it does not know, so this would otherwise
+# parse, take the defaults, and never read the targets that were
+# written.
+check_rejected envoy-targets-bad-no-wrapper.yaml     "targets without a policy wrapper -> refused"
 
 if (( failed > 0 )); then
     echo
