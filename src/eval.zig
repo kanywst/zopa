@@ -123,7 +123,25 @@ pub fn evaluateCompiled(
     target_rule: []const u8,
 ) !bool {
     const input_value = try json.parse(arena.allocator(), input_json);
-    return evalBundle(bundle, target_package, target_rule, input_value);
+    return evaluateParsed(input_value, bundle, target_package, target_rule);
+}
+
+/// Decide against an input that has already been parsed.
+///
+/// For a caller evaluating several rules against one request -- the
+/// proxy-wasm shim with more than one target on a phase -- re-parsing
+/// the same bytes per rule would allocate a fresh tree each time on an
+/// arena that is reset with `.retain_capacity`, so the steady-state
+/// high-water mark, and with it the plateau of wasm linear memory,
+/// would scale with the number of targets rather than the largest
+/// single input.
+pub fn evaluateParsed(
+    input: json.Value,
+    bundle: ast.Modules,
+    target_package: []const u8,
+    target_rule: []const u8,
+) !bool {
+    return evalBundle(bundle, target_package, target_rule, input);
 }
 
 /// Evaluate `target_rule` over every rule contributed to

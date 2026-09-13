@@ -533,6 +533,15 @@ fn decideTargets(
     policy: ast.Modules,
     targets: []const targets_mod.Target,
 ) bool {
+    // Parsed once, not once per target. Every target on a phase sees
+    // the same request, and re-parsing per target would grow the
+    // request arena's retained high-water mark with the number of
+    // targets rather than with the largest input.
+    const input_value = json.parse(arena.allocator(), input) catch {
+        logMsg(log_level_warn, "zopa: could not parse the synthesised input; denying");
+        return false;
+    };
+
     var allowed = true;
     for (targets) |t| {
         // Every target is evaluated even once the decision is settled.
@@ -540,7 +549,7 @@ fn decideTargets(
         // advisory targets after it, so the audit trail would lose
         // exactly the requests an operator most wants on it -- and
         // whether it did would depend on target order.
-        const result = eval.evaluateCompiled(arena, input, policy, t.package, t.rule) catch {
+        const result = eval.evaluateParsed(input_value, policy, t.package, t.rule) catch {
             if (t.enforce) {
                 logMsg(log_level_warn, "zopa: enforcing target failed to evaluate; denying");
                 allowed = false;
