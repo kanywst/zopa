@@ -118,6 +118,8 @@ Without a `targets` block the shim behaves exactly as every release before this 
 
 **Everything a targets block can get wrong fails configure**: an unknown phase, an unknown `on_deny`, a rule the policy does not define, a malformed entry. A target that never fires is worse than a filter that refuses to start, because nothing surfaces it.
 
+**A phase rule outside the default package is refused in the bare shape.** The bare configuration only dispatches into the implicit `""` package, so an `allow_body` defined in some other package can never fire — taking it would silently start enforcing something the shim never reached, and ignoring it would leave the phase unguarded while the policy looks like it covers the body. Name it in a `targets` block instead.
+
 **A bare AST carrying a top-level `targets` key is refused.** The AST builder ignores members it does not recognise, so such a document would otherwise parse, take the defaults, and never read the targets that were written — a misconfiguration that changes what the filter enforces and says nothing. Use the `policy` wrapper.
 
 **An advisory deny is not logged per request.** It is the ordinary outcome of an advisory target, and how often it happens is decided by the shape of the traffic — so a log line there would be a client-driven, unthrottled host call on the hot path for the case the feature exists to make routine. Record the decision in the proxy's access log, which can sample and structure it.

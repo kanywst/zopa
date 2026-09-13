@@ -69,6 +69,7 @@ pub const Set = struct {
 
 pub const Error = error{
     NoEnforcingRequestTarget,
+    PhaseRuleOutsideDefaultPackage,
     TargetsWithoutPolicyWrapper,
     UnknownPhase,
     UnknownOnDeny,
@@ -168,21 +169,37 @@ fn defaults(allocator: std.mem.Allocator, bundle: ast.Modules) Error!Set {
     const request = try allocator.alloc(Target, 1);
     request[0] = .{ .package = "", .rule = default_request_rule };
 
-    var body: []Target = &.{};
-    if (ruleExists(bundle, "", default_body_rule)) {
-        const buf = try allocator.alloc(Target, 1);
-        buf[0] = .{ .package = "", .rule = default_body_rule };
-        body = buf;
-    }
-
-    var response: []Target = &.{};
-    if (ruleExists(bundle, "", default_response_rule)) {
-        const buf = try allocator.alloc(Target, 1);
-        buf[0] = .{ .package = "", .rule = default_response_rule };
-        response = buf;
-    }
+    const body = try defaultPhase(allocator, bundle, default_body_rule);
+    const response = try defaultPhase(allocator, bundle, default_response_rule);
 
     return .{ .request = request, .body = body, .response = response };
+}
+
+/// One phase's default target, or none.
+///
+/// The bare configuration only ever dispatches into the implicit `""`
+/// package. A policy that defines `allow_body` in some *other* package
+/// without one in `""` is therefore a rule that can never fire, and
+/// this refuses rather than guessing: taking the rule would silently
+/// start enforcing something the shim never used to reach, and ignoring
+/// it would leave the phase unguarded while the policy looks like it
+/// covers the body. Name it in a `targets` block instead.
+fn defaultPhase(
+    allocator: std.mem.Allocator,
+    bundle: ast.Modules,
+    rule: []const u8,
+) Error![]Target {
+    if (ruleExists(bundle, "", rule)) {
+        const buf = try allocator.alloc(Target, 1);
+        buf[0] = .{ .package = "", .rule = rule };
+        return buf;
+    }
+    for (bundle.modules) |module| {
+        for (module.rules) |r| {
+            if (std.mem.eql(u8, r.name, rule)) return error.PhaseRuleOutsideDefaultPackage;
+        }
+    }
+    return &.{};
 }
 
 fn ruleExists(bundle: ast.Modules, package: []const u8, rule: []const u8) bool {
@@ -354,4 +371,26 @@ test "targets: a bare AST carrying `targets` is refused, not silently ignored" {
     // A non-object configuration is not a wrapper; the AST builder
     // rejects it on its own terms.
     try testing.expectEqual(@as(?json.Value, null), try shapeOf(try json.parse(allocator, "[]")));
+}
+
+test "targets: a phase rule outside the default package is refused, not half-enabled" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // The bare shape only dispatches into the implicit package, so
+    // `authz.allow_body` can never fire. Before the phase gate and the
+    // target list shared one source of truth, this turned the body
+    // phase *on* with no target to evaluate -- and an empty target list
+    // allows from an empty loop, so every body was permitted.
+    const parsed = try parse(&arena,
+        \\{"type":"modules","modules":[
+        \\  {"type":"module","package":"","rules":[
+        \\    {"type":"rule","name":"allow","value":{"type":"value","value":true}}]},
+        \\  {"type":"module","package":"authz","rules":[
+        \\    {"type":"rule","name":"allow_body","value":{"type":"value","value":true}}]}]}
+    );
+    try testing.expectError(
+        Error.PhaseRuleOutsideDefaultPackage,
+        build(arena.allocator(), parsed.bundle, null),
+    );
 }

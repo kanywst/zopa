@@ -69,8 +69,6 @@ const log_level_error: i32 = 4;
 // Target rule per phase. Disjoint names let one bundled policy carry
 // rules for all three.
 const request_target_rule: []const u8 = eval.default_target_rule;
-const body_target_rule: []const u8 = "allow_body";
-const response_target_rule: []const u8 = "allow_response";
 
 /// Ceiling on how much request body we ask the host for. A policy
 /// that reads the body and hits this cap denies -- see
@@ -259,25 +257,22 @@ fn compilePolicy(policy_bytes: []const u8) bool {
             error.TargetRuleMissing => logMsg(log_level_error, "zopa: target names a rule the policy does not define"),
             error.NoEnforcingRequestTarget => logMsg(log_level_error, "zopa: targets block has no enforcing request-phase target; every request would be allowed"),
             error.TargetsWithoutPolicyWrapper => logMsg(log_level_error, "zopa: configuration carries `targets` without a `policy` wrapper"),
+            error.PhaseRuleOutsideDefaultPackage => logMsg(log_level_error, "zopa: a phase rule is defined outside the default package; name it in a `targets` block"),
             else => logMsg(log_level_error, "zopa: targets block is malformed"),
         }
         return false;
     };
 
-    var body_rules = false;
-    var response_rules = false;
-    for (bundle.modules) |module| {
-        for (module.rules) |rule| {
-            if (std.mem.eql(u8, rule.name, body_target_rule)) body_rules = true;
-            if (std.mem.eql(u8, rule.name, response_target_rule)) response_rules = true;
-        }
-    }
-    // An explicit targets block decides which phases run; the scan above
-    // only governs the default arrangement.
-    if (wrapped) {
-        body_rules = targets.body.len > 0;
-        response_rules = targets.response.len > 0;
-    }
+    // The targets decide which phases run, in both configuration
+    // shapes. A separate scan used to answer this for the bare shape,
+    // and the two could disagree: it looked for a rule named
+    // `allow_body` in *any* package while the default targets only pick
+    // one up from the implicit `""`, so a bare multi-package policy
+    // turned the body phase on with no target to evaluate -- and an
+    // empty target list allows from an empty loop. One source of truth
+    // instead.
+    const body_rules = targets.body.len > 0;
+    const response_rules = targets.response.len > 0;
 
     if (policy_arena) |*old| old.deinit();
     policy_arena = arena;
