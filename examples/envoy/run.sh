@@ -148,9 +148,12 @@ check_rejected() {
     envoy -c "$run_yaml" --log-level warn > "$log" 2>&1 &
     local pid=$!
 
-    # Give it the same grace a good config gets to come up.
+    # The same 8s budget `start_envoy` gives a good config. Shorter
+    # would risk calling a slow start "refused before serving", turning
+    # this check -- whose whole job is catching fail-open regressions --
+    # into a false negative.
     local serving=0
-    for _ in $(seq 1 40); do
+    for _ in $(seq 1 80); do
         if ! kill -0 "$pid" 2>/dev/null; then
             break
         fi
