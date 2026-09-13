@@ -112,6 +112,8 @@ Without a `targets` block the shim behaves exactly as every release before this 
 
 **Composition is AND.** With more than one enforcing target on a phase, all must allow. ORing would let an added rule widen access, so adding an enforcing target can only ever narrow it.
 
+**Every target on a phase is evaluated**, even once an enforcing one has already denied or failed. Returning early would skip the advisory targets after it, so the audit trail would lose exactly the requests an operator most wants on it, and whether it did would depend on the order they were listed in.
+
 **An advisory target never blocks.** It is evaluated against the same input and its deny is logged. Its *errors* do not deny either: a broken audit rule is a broken audit trail, not a reason to reject traffic. That is the one place the shim deliberately does not fail closed, and it is why `deny` is the default -- a misspelled `on_deny` field cannot quietly turn a blocking rule advisory.
 
 **Everything a targets block can get wrong fails configure**: an unknown phase, an unknown `on_deny`, a rule the policy does not define, a malformed entry. A target that never fires is worse than a filter that refuses to start, because nothing surfaces it.

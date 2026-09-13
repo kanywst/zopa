@@ -13,6 +13,7 @@ pub const eval = @import("eval.zig");
 pub const json = @import("json.zig");
 pub const memory = @import("memory.zig");
 pub const policy = @import("policy.zig");
+pub const targets = @import("targets.zig");
 pub const wire = @import("wire.zig");
 
 pub const Value = json.Value;
@@ -32,5 +33,6 @@ test {
     _ = eval;
     _ = json;
     _ = policy;
+    _ = targets;
     _ = wire;
 }
