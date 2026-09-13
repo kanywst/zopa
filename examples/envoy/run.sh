@@ -121,6 +121,66 @@ start_envoy() {
 
 failed=0
 
+# check_rejected <template-basename> <description>
+#
+# A configuration zopa must refuse. `proxy_on_configure` returning
+# failure makes Envoy refuse to instantiate the filter -- in practice it
+# logs "Unable to create Wasm plugin" and never reaches LIVE, so the
+# process exits rather than serving. Either outcome is a pass: what must
+# not happen is Envoy coming up and answering 200, which would mean the
+# bad config was accepted and the filter is deciding with it.
+#
+# Deliberately does not go through `start_envoy`, whose job is to make a
+# failed start fatal.
+check_rejected() {
+    local template=$1 name=$2
+    local run_yaml="$WORK/$template"
+    local log="$WORK/$template.log"
+
+    sed \
+        -e "s|__WASM_PATH__|$WASM|g" \
+        -e "s|__PORT__|$PORT|g" \
+        -e "s|__BACKEND_PORT__|$BACKEND_PORT|g" \
+        -e "s|__ADMIN_PORT__|$ADMIN_PORT|g" \
+        -e "s|__RUNTIME__|$RUNTIME|g" \
+        "$EXAMPLE_DIR/$template" > "$run_yaml"
+
+    envoy -c "$run_yaml" --log-level warn > "$log" 2>&1 &
+    local pid=$!
+
+    # Give it the same grace a good config gets to come up.
+    local serving=0
+    for _ in $(seq 1 40); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            break
+        fi
+        if curl -sf -o /dev/null "http://127.0.0.1:$ADMIN_PORT/ready" 2>/dev/null; then
+            serving=1
+            break
+        fi
+        sleep 0.1
+    done
+
+    local verdict="refused before serving"
+    if (( serving == 1 )); then
+        local actual
+        actual=$(curl -s -o /dev/null -w "%{http_code}" -X GET "$base/")
+        if [[ "$actual" == "200" ]]; then
+            echo "FAIL  $name: envoy came up and returned 200; the config was accepted"
+            failed=$((failed + 1))
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return
+        fi
+        verdict="HTTP $actual"
+    fi
+
+    echo "PASS  $name ($verdict)"
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+}
+
+
 # check <name> <expected-status> [curl args...] -- path defaults to /
 check() {
     local name=$1 expected_status=$2
@@ -274,6 +334,25 @@ check "POST /public -> 403 (enforcing target denies)"   403 -X POST "$base/publi
 check "POST /private -> 403 (both deny)"                403 -X POST "$base/private"
 
 stop_envoy
+
+# ---------------------------------------------------------------------------
+# Scenario 4: configurations that must be refused.
+#
+# Everything a targets block can get wrong fails configure rather than
+# degrading, and this is the only suite that reaches
+# `proxy_on_configure` at all. The first two are the important ones: a
+# targets block with no enforcing request-phase target would otherwise
+# make `decideTargets` return allow from an empty loop and let every
+# request through, configured-looking and silent.
+# ---------------------------------------------------------------------------
+echo
+echo "-- scenario: refused configurations ($RUNTIME)"
+
+check_rejected envoy-targets-bad-no-request.yaml     "no enforcing request target -> refused"
+check_rejected envoy-targets-bad-empty.yaml          "empty targets list -> refused"
+check_rejected envoy-targets-bad-unknown-phase.yaml  "unknown phase -> refused"
+check_rejected envoy-targets-bad-unknown-on-deny.yaml "unknown on_deny -> refused"
+check_rejected envoy-targets-bad-missing-rule.yaml   "target names a missing rule -> refused"
 
 if (( failed > 0 )); then
     echo

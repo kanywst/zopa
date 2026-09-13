@@ -116,6 +116,8 @@ Without a `targets` block the shim behaves exactly as every release before this 
 
 **Everything a targets block can get wrong fails configure**: an unknown phase, an unknown `on_deny`, a rule the policy does not define, a malformed entry. A target that never fires is worse than a filter that refuses to start, because nothing surfaces it.
 
+**A targets block must name at least one enforcing request-phase target.** The request phase has no existence gate the way body and response do -- it always runs -- so an empty list would make the phase allow from an empty loop and let every request through, configured-looking and silent. `{"targets": []}` alone would have disabled authorization. A filter that only inspects bodies is a reasonable thing to want, but it has to say so by naming a request rule that allows, rather than getting the same effect by omission.
+
 A truncated request body is refused if *any* body target reads the body, not just the first -- otherwise a second target could read it unprotected.
 
 ## Imports
