@@ -1,0 +1,150 @@
+# Envoy bootstrap for the proxy-wasm end-to-end check.
+#
+# Placeholders substituted by examples/envoy/run.sh:
+#   __WASM_PATH__   absolute path to zig-out/bin/zopa.wasm
+#   __PORT__        data plane listener port
+#   __ADMIN_PORT__  admin port (used to detect readiness)
+#   __RUNTIME__     wasm runtime id (wamr locally, v8 in CI)
+#
+# The route ends in `direct_response`, so no upstream is needed.
+# zopa runs as the first HTTP filter; deny short-circuits with 403,
+# allow falls through to the response.
+
+admin:
+  address:
+    socket_address: { address: 127.0.0.1, port_value: __ADMIN_PORT__ }
+
+static_resources:
+  listeners:
+    - name: ingress_listener
+      address:
+        socket_address: { address: 127.0.0.1, port_value: __PORT__ }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                codec_type: AUTO
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          direct_response:
+                            status: 200
+                            body:
+                              inline_string: "ok\n"
+                http_filters:
+                  - name: envoy.filters.http.wasm
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+                      config:
+                        name: zopa
+                        root_id: zopa
+                        # Policy: deny by default, allow when method is GET.
+                        configuration:
+                          "@type": type.googleapis.com/google.protobuf.StringValue
+                          value: |
+                            {
+                              "policy": {
+                                "type": "modules",
+                                "modules": [
+                                  {
+                                    "type": "module",
+                                    "package": "authz",
+                                    "rules": [
+                                      {
+                                        "type": "rule",
+                                        "name": "allow",
+                                        "default": true,
+                                        "value": {
+                                          "type": "value",
+                                          "value": false
+                                        }
+                                      },
+                                      {
+                                        "type": "rule",
+                                        "name": "allow",
+                                        "body": [
+                                          {
+                                            "type": "eq",
+                                            "left": {
+                                              "type": "ref",
+                                              "path": [
+                                                "input",
+                                                "method"
+                                              ]
+                                            },
+                                            "right": {
+                                              "type": "value",
+                                              "value": "GET"
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "type": "module",
+                                    "package": "audit",
+                                    "rules": [
+                                      {
+                                        "type": "rule",
+                                        "name": "ok",
+                                        "default": true,
+                                        "value": {
+                                          "type": "value",
+                                          "value": false
+                                        }
+                                      },
+                                      {
+                                        "type": "rule",
+                                        "name": "ok",
+                                        "body": [
+                                          {
+                                            "type": "call",
+                                            "name": "startswith",
+                                            "args": [
+                                              {
+                                                "type": "ref",
+                                                "path": [
+                                                  "input",
+                                                  "path"
+                                                ]
+                                              },
+                                              {
+                                                "type": "value",
+                                                "value": "/public"
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              "targets": [
+                                {
+                                  "phase": "request",
+                                  "package": "authz",
+                                  "rule": "allow",
+                                  "on_deny": "warn"
+                                }
+                              ]
+                            }
+                        vm_config:
+                          # Homebrew Envoy ships `wamr`. The upstream
+                          # binary and Docker image use
+                          # `envoy.wasm.runtime.v8` instead. zopa runs
+                          # on either; run.sh picks via ZOPA_ENVOY_RUNTIME.
+                          runtime: __RUNTIME__
+                          code:
+                            local:
+                              filename: __WASM_PATH__
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

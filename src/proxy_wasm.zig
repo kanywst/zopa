@@ -270,6 +270,7 @@ fn compilePolicy(policy_bytes: []const u8) bool {
             error.UnknownPhase => logMsg(log_level_error, "zopa: target names an unknown phase"),
             error.UnknownOnDeny => logMsg(log_level_error, "zopa: target has an unknown on_deny"),
             error.TargetRuleMissing => logMsg(log_level_error, "zopa: target names a rule the policy does not define"),
+            error.NoEnforcingRequestTarget => logMsg(log_level_error, "zopa: targets block has no enforcing request-phase target; every request would be allowed"),
             else => logMsg(log_level_error, "zopa: targets block is malformed"),
         }
         return false;
@@ -325,6 +326,7 @@ const TargetSet = struct {
 };
 
 const TargetError = error{
+    NoEnforcingRequestTarget,
     UnknownPhase,
     UnknownOnDeny,
     TargetRuleMissing,
@@ -395,6 +397,21 @@ fn buildTargets(
             return error.UnknownPhase;
         try list.append(allocator, target);
     }
+
+    // The request phase has no `has_allow_*` gate -- it always runs --
+    // so an empty list here would make `decideTargets` return allow
+    // from an empty loop and let every request through, with no
+    // configure error and no log line. `{"targets": []}` alone would
+    // have disabled authorization while looking configured.
+    //
+    // A filter that only inspects bodies is a real thing to want, but
+    // it has to say so: name a request rule that allows, rather than
+    // getting the same effect by omission.
+    var enforcing_request = false;
+    for (request.items) |t| {
+        if (t.enforce) enforcing_request = true;
+    }
+    if (!enforcing_request) return error.NoEnforcingRequestTarget;
 
     return .{
         .request = try request.toOwnedSlice(allocator),
@@ -627,11 +644,12 @@ fn evaluateResponse(policy: ast.Modules) bool {
     return decideTargets(arena, input, policy, response_targets);
 }
 
-/// Every phase dispatches into the implicit `""` package: a
-/// proxy-wasm filter carries one policy and selects the rule by phase,
-/// not by package. Multi-package addressing is a host-driven feature
-/// and goes through the `evaluate_addressed` export instead.
 /// Evaluate every target for a phase and combine them.
+///
+/// Which `(package, rule)` pairs those are comes from the plugin
+/// configuration. Without a `targets` block it is one rule per phase in
+/// the implicit `""` package, which is what a proxy-wasm filter did
+/// before targets existed and remains the default.
 ///
 /// Enforcing targets are ANDed: with more than one, all must allow.
 /// That is the only safe composition -- ORing would let an added rule
@@ -670,15 +688,6 @@ fn decideTargets(
         }
     }
     return allowed;
-}
-
-fn decide(
-    arena: *std.heap.ArenaAllocator,
-    input: []const u8,
-    policy: ast.Modules,
-    target_rule: []const u8,
-) bool {
-    return eval.evaluateCompiled(arena, input, policy, "", target_rule) catch false;
 }
 
 // ---------------------------------------------------------------------------
