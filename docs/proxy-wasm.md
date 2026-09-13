@@ -118,6 +118,10 @@ Without a `targets` block the shim behaves exactly as every release before this 
 
 **Everything a targets block can get wrong fails configure**: an unknown phase, an unknown `on_deny`, a rule the policy does not define, a malformed entry. A target that never fires is worse than a filter that refuses to start, because nothing surfaces it.
 
+**A bare AST carrying a top-level `targets` key is refused.** The AST builder ignores members it does not recognise, so such a document would otherwise parse, take the defaults, and never read the targets that were written — a misconfiguration that changes what the filter enforces and says nothing. Use the `policy` wrapper.
+
+**An advisory deny is not logged per request.** It is the ordinary outcome of an advisory target, and how often it happens is decided by the shape of the traffic — so a log line there would be a client-driven, unthrottled host call on the hot path for the case the feature exists to make routine. Record the decision in the proxy's access log, which can sample and structure it.
+
 **A targets block must name at least one enforcing request-phase target.** The request phase has no existence gate the way body and response do -- it always runs -- so an empty list would make the phase allow from an empty loop and let every request through, configured-looking and silent. `{"targets": []}` alone would have disabled authorization. A filter that only inspects bodies is a reasonable thing to want, but it has to say so by naming a request rule that allows, rather than getting the same effect by omission.
 
 A truncated request body is refused if any **enforcing** body target reads the body -- not just the first, since another could otherwise read it unprotected.

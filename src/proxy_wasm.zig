@@ -241,12 +241,14 @@ fn compilePolicy(policy_bytes: []const u8) bool {
     const policy = allocator.dupe(u8, policy_bytes) catch return false;
     const config = json.parse(allocator, policy) catch return false;
 
-    // Two accepted shapes. Historically the whole configuration *is*
-    // the policy AST; a document carrying a `policy` key is the newer
-    // wrapper that can also name targets. No AST node has a top-level
-    // `policy` member, so the two cannot be confused.
-    const wrapped = config == .object and json.lookupMember(config.object, "policy") != null;
-    const ast_value = if (wrapped) json.lookupMember(config.object, "policy").? else config;
+    // Which shape this is -- and whether it is a coherent one at all --
+    // is decided in `targets.zig`, where a unit test can reach it.
+    const wrapped_policy = targets_mod.shapeOf(config) catch {
+        logMsg(log_level_error, "zopa: configuration carries `targets` without a `policy` wrapper; the targets would be ignored");
+        return false;
+    };
+    const wrapped = wrapped_policy != null;
+    const ast_value = wrapped_policy orelse config;
 
     const bundle = ast.buildModulesBundle(allocator, ast_value) catch return false;
 
@@ -256,6 +258,7 @@ fn compilePolicy(policy_bytes: []const u8) bool {
             error.UnknownOnDeny => logMsg(log_level_error, "zopa: target has an unknown on_deny"),
             error.TargetRuleMissing => logMsg(log_level_error, "zopa: target names a rule the policy does not define"),
             error.NoEnforcingRequestTarget => logMsg(log_level_error, "zopa: targets block has no enforcing request-phase target; every request would be allowed"),
+            error.TargetsWithoutPolicyWrapper => logMsg(log_level_error, "zopa: configuration carries `targets` without a `policy` wrapper"),
             else => logMsg(log_level_error, "zopa: targets block is malformed"),
         }
         return false;
@@ -554,9 +557,15 @@ fn decideTargets(
         if (result) continue;
         if (t.enforce) {
             allowed = false;
-        } else {
-            logMsg(log_level_warn, "zopa: audit target denied; not enforcing");
         }
+        // Deliberately not logged per request. An advisory target
+        // denying is its ordinary outcome, not an anomaly, and the
+        // shape of the traffic decides how often it happens -- so a
+        // log line here would be a client-driven, unthrottled
+        // host-boundary crossing on the hot path, at warn level, for
+        // the case the feature exists to make routine. The decision
+        // belongs in the proxy's access log, which can sample and
+        // structure it; see docs/proxy-wasm.md.
     }
     return allowed;
 }
