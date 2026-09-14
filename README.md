@@ -79,19 +79,19 @@ Per-decision cost, microseconds:
 
 | Policy                                        | zopa (evaluate) | zopa (compiled) | OPA (wasm) | Cedar (wasm) | OPA (sidecar) |
 | --------------------------------------------- | --------------- | --------------- | ---------- | ------------ | ------------- |
-| literal `allow = true`                        | 0.34            | **0.08**        | 1.27       | 13.0         | 176           |
-| `input.method == "GET"`                       | 1.05            | **0.21**        | 1.09       | 15.7         | 171           |
-| default-deny RBAC: path prefix + role + perms | 7.20            | **1.57**        | 2.52       | 77.2         | 183           |
+| literal `allow = true`                        | 0.33            | **0.09**        | 0.84       | 11.3         | 127           |
+| `input.method == "GET"`                       | 0.97            | **0.20**        | 0.96       | 14.8         | 131           |
+| default-deny RBAC: path prefix + role + perms | 5.78            | **1.33**        | 2.23       | 53.4         | 148           |
 
 | | zopa | OPA (wasm) | OPA (sidecar) |
 | --- | --- | --- | --- |
-| deployed artifact | **63 KB**, all policies | 131 KB **per policy** | — |
-| memory after warm-up | 1.4 MB | **128 KB** | 23 MB |
-| cold start | **0.4 ms** | 0.5 ms | 30-60 ms |
+| deployed artifact | **69 KB**, all policies | 131 KB **per policy** | — |
+| memory after warm-up | 1.3-1.6 MB | **128 KB** | 23 MB |
+| cold start | **0.4 ms** | 0.5 ms | 55-60 ms |
 
 What those say:
 
-- **Compile the policy once if you serve traffic.** The gap between the two zopa columns is the AST parse and nothing else: 4.4 µs of the 5.76 on the RBAC row. `evaluate` is for tests, one-shot callers, and hosts that genuinely get a different policy every time.
+- **Compile the policy once if you serve traffic.** The gap between the two zopa columns is the AST parse and nothing else: 4.5 µs of the 5.78 on the RBAC row. `evaluate` is for tests, one-shot callers, and hosts that genuinely get a different policy every time.
 - **Held that way, zopa is faster than OPA's wasm build on every fixture,** and 1.7x faster on the realistic one. Through `evaluate` it was 2.6x slower on that same row -- the parse was the whole difference.
 - **Against a sidecar, either in-process engine wins by ~100x.** That is the claim zopa is built on. It is also the least interesting row: it compares a TCP round trip to a function call.
 - **The Cedar column is not a verdict on Cedar.** Its policy set is preparsed, so this is not a parse cost; what remains is mostly the wasm-bindgen serialisation boundary that `@cedar-policy/cedar-wasm` puts between Node and the evaluator. It measures Cedar *through its WASM binding*, which is the only way to reach it from Node. A native embedding would look different.
@@ -167,7 +167,7 @@ Reaching for the wrong tool costs more than the 69 KB saves:
 
 The five decision exports return `1` (allow), `0` (deny), or `-1` (error). Treat `-1` as deny; it means the input or policy could not be evaluated, which is never a grant. A handle that was never issued, or has already been released, is an error and therefore denies -- including after its slot has been reused by a later `policy_compile`, since a handle carries the generation of the slot it was issued for as well as its index.
 
-**Compile once if you serve traffic.** `evaluate` is handed the AST on every call and cannot know it is the same one as last time, so it re-parses and rebuilds the policy each request -- on the benchmark's RBAC fixture that is 4.4 µs of 5.76. `policy_compile` builds it onto its own arena and hands back a handle; `evaluate_compiled` then does the input parse and the rule walk and nothing else. The host owns the handle and must `policy_release` it; nothing in the module can know when you are done, so a handle you drop leaks the policy for the life of the module, exactly like a `malloc` you never free. This is the arrangement the proxy-wasm path has always used internally.
+**Compile once if you serve traffic.** `evaluate` is handed the AST on every call and cannot know it is the same one as last time, so it re-parses and rebuilds the policy each request -- on the benchmark's RBAC fixture that is 4.5 µs of 5.78. `policy_compile` builds it onto its own arena and hands back a handle; `evaluate_compiled` then does the input parse and the rule walk and nothing else. The host owns the handle and must `policy_release` it; nothing in the module can know when you are done, so a handle you drop leaks the policy for the life of the module, exactly like a `malloc` you never free. This is the arrangement the proxy-wasm path has always used internally.
 
 Buffers passed in must stay alive for the duration of the call -- string values in the parsed tree alias them rather than being copied.
 

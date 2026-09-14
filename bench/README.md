@@ -89,29 +89,29 @@ Seed from a full run, never from `--quick`: 300 iterations is enough for the agr
 
 ## What the numbers said when this landed
 
-Apple M-series laptop, Node 26, OPA 1.20.2, Cedar 4.12.0, `--release=small`. Reproduce with `zig build bench`; treat the absolute values as machine-specific and the ratios as the result.
+Apple M-series laptop, Node 26, OPA 1.20.2, Cedar 4.12.0, `--release=small` at v0.5.0. Reproduce with `zig build bench`; treat the absolute values as machine-specific and the ratios as the result.
 
 Per-decision cost, microseconds (`amort`):
 
 | fixture | zopa (evaluate) | zopa (compiled) | OPA (wasm) | Cedar (wasm) | OPA (HTTP sidecar) |
 | --- | --- | --- | --- | --- | --- |
-| `01_static` | 0.34 | **0.08** | 1.27 | 13.0 | 176 |
-| `02_header_eq` | 1.05 | **0.21** | 1.09 | 15.7 | 171 |
-| `03_rbac` | 7.20 | **1.57** | 2.52 | 77.2 | 183 |
-| `04_deep_nest` | 8.60 | **0.57** | — | — | — |
+| `01_static` | 0.33 | **0.09** | 0.84 | 11.3 | 127 |
+| `02_header_eq` | 0.97 | **0.20** | 0.96 | 14.8 | 131 |
+| `03_rbac` | 5.78 | **1.33** | 2.23 | 53.4 | 148 |
+| `04_deep_nest` | 6.12 | **0.40** | — | — | — |
 
 Footprint and start-up:
 
 | | zopa | OPA (wasm) | OPA (HTTP sidecar) |
 | --- | --- | --- | --- |
-| deployed artifact | **63 KiB**, all policies | 131 KiB **per policy** | — |
+| deployed artifact | **69 KiB**, all policies | 131 KiB **per policy** | — |
 | memory after warm-up | 1.3–1.6 MiB | **128 KiB** | 23 MiB |
-| cold start | **0.4 ms** | 0.5 ms | 30–60 ms |
+| cold start | **0.4 ms** | 0.5 ms | 55–60 ms |
 
 Five things to take from that, including the one that does not favour zopa:
 
 1. **Handing the policy over on every call is most of the cost.** The gap between the two zopa rows is exactly what the AST parse and build cost, because nothing else differs between them. If you drive the same policy across requests through `evaluate`, that is what you are paying for the convenience.
-2. **With the policy held, zopa is faster than OPA's wasm build on every fixture** — 1.57 µs against 2.52 on the realistic RBAC policy, where the one-shot path lost. An earlier revision of this file predicted exactly this and could not demonstrate it, because no export took a pre-built policy. `policy_compile` / `evaluate_compiled` is that export.
+2. **With the policy held, zopa is faster than OPA's wasm build on every fixture** — 1.33 µs against 2.23 on the realistic RBAC policy, where the one-shot path lost. An earlier revision of this file predicted exactly this and could not demonstrate it, because no export took a pre-built policy. `policy_compile` / `evaluate_compiled` is that export.
 3. **Both in-process wasm engines beat the sidecar by two orders of magnitude.** This is the claim zopa was built on and it holds with room to spare. It is also the least surprising row: it measures a loopback TCP round trip against a function call.
 4. **The Cedar row is not a verdict on Cedar.** Its policy set is preparsed via `statefulIsAuthorized`, so this is not a policy-parse cost — preparsing takes it from ~60 µs to ~29 µs on the simplest fixture, and the rest stays. What is left is mostly the wasm-bindgen boundary: every call serialises principal, action, resource, context and entities in and an answer out. This measures Cedar *through its WASM binding*, which is the only way to reach it from Node, and a native embedding would look different. It is in the table because the README's comparison names Cedar and because leaving it out was the easier, less honest option.
 5. **zopa holds more WASM memory than OPA's module does** — about 1.4–1.6 MiB against 128 KiB. That is the arena working as designed: it is reset with `.retain_capacity` after every request so `memory.grow` stops firing once warm, trading a steady-state floor for never allocating again. OPA rewinds its heap pointer instead. Against the sidecar's 23 MiB both are rounding errors, but "smaller binary" does not imply "smaller runtime footprint" and the table should not be read as if it did.
