@@ -22,6 +22,35 @@ licence_file=${5:-LICENSE}
 
 zig_version=$(zig version)
 
+# Establish that this is syft's own output before annotating it. This is
+# the check that catches a scan which broke rather than one that found
+# nothing -- see the components check below for why the two cannot be
+# told apart by looking for a `components` key.
+#
+# bomFormat/specVersion prove the file is a CycloneDX document and not a
+# truncated write or an error payload; the syft entry in metadata.tools
+# proves syft is what produced it. metadata.tools is normalised by the jq
+# below, so this has to read the pre-annotation shape -- either of them.
+if ! jq -e '.bomFormat == "CycloneDX" and (.specVersion | type == "string" and length > 0)' \
+     "$sbom" >/dev/null; then
+    echo "$sbom is not a CycloneDX document; the scan did not produce a usable file" >&2
+    exit 1
+fi
+if ! jq -e '[(.metadata.tools | if type == "array" then .[] else .components[] end).name]
+            | index("syft")' "$sbom" >/dev/null 2>&1; then
+    echo "$sbom does not name syft in metadata.tools; it is not a syft scan result" >&2
+    exit 1
+fi
+
+# A `components` key that is neither absent, null, nor an array means
+# something rewrote the document into a shape this script cannot reason
+# about. Zero components is legitimate (below); a string or an object
+# there is not.
+if ! jq -e '(.components == null) or (.components | type == "array")' "$sbom" >/dev/null; then
+    echo "$sbom has a components key that is not an array" >&2
+    exit 1
+fi
+
 tmp=$(mktemp)
 jq --arg zig "$zig_version" \
    --arg sha "$sha" \
@@ -76,17 +105,16 @@ jq -e '.metadata.tools.components[] | select(.name == "zig")' "$sbom" >/dev/null
 # build.zig.zon declares no dependencies and the module is stdlib-only,
 # so zero is the answer. Non-zero means the scan is wrong, not that a
 # dependency appeared.
-# `null | length` is 0 in jq, so a document with no `components` key --
-# or an explicit null -- would read as "zero, verified clean" and pass
-# the check below. The drift this guards against does not only produce
-# *more* components; a broken or misdirected scan can as easily produce
-# a document missing the key entirely.
-if ! jq -e 'has("components") and (.components | type == "array")' "$sbom" >/dev/null; then
-    echo "sbom has no components array; the scan did not produce a usable document" >&2
-    exit 1
-fi
-
-components=$(jq '.components | length' "$sbom")
+#
+# Absent is zero, and that is not laxity: syft omits `components`
+# entirely when it finds nothing, which for this repo is every release.
+# v0.5.0 failed here because an earlier version of this check required
+# the key to be present, and so rejected the one shape a correct scan of
+# a zero-dependency artifact can produce. "Key missing" therefore cannot
+# mean "the scan broke" -- what distinguishes a broken scan is that it
+# does not produce syft's document envelope at all, which is checked
+# above, before the annotation.
+components=$(jq '(.components // []) | length' "$sbom")
 if [ "$components" != "0" ]; then
     echo "expected zero dependency components (build.zig.zon declares none); got $components." >&2
     echo "the scan target is probably wrong -- check the sbom-action inputs." >&2

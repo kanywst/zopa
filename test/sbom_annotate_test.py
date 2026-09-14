@@ -40,6 +40,23 @@ def sbom(tools, components=None):
     }
 
 
+def syft_empty_scan(tools=None):
+    """The document syft actually writes when it finds no components.
+
+    Taken from the shipped v0.4.1 SBOM: there is no `components` key at
+    all. This is the shape of every correct zopa scan, and the shape the
+    v0.5.0 release failed on.
+    """
+    return {
+        "$schema": "https://cyclonedx.org/schema/bom-1.7.schema.json",
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.7",
+        "serialNumber": "urn:uuid:0d5ad0fd-1a1e-4f7e-bd3b-3e86a9a5f6c0",
+        "version": 1,
+        "metadata": {"tools": tools if tools is not None else TOOLS_OBJECT},
+    }
+
+
 class Annotate(unittest.TestCase):
     def run_script(self, doc, *, artifact=ARTIFACT_BYTES, sha=ARTIFACT_SHA, licence=None):
         with TemporaryDirectory() as d:
@@ -100,22 +117,68 @@ class Annotate(unittest.TestCase):
         self.assertIn("expected zero dependency components", proc.stderr)
         self.assertIn("some-action", proc.stderr)
 
-    def test_refuses_a_document_with_no_components_key(self):
-        # `null | length` is 0 in jq, so a missing key would otherwise
-        # read as "zero, verified clean" -- the failure mode of a scan
-        # that broke rather than one that found nothing.
-        doc = sbom(TOOLS_OBJECT)
-        del doc["components"]
-        proc, _ = self.run_script(doc)
-        self.assertEqual(proc.returncode, 1)
-        self.assertIn("no components array", proc.stderr)
+    def test_accepts_syfts_empty_scan_document(self):
+        # The regression that broke v0.5.0. syft omits `components`
+        # entirely when it finds nothing, so requiring the key rejected
+        # the only shape a correct scan of this repo can produce.
+        proc, out = self.run_script(syft_empty_scan())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("components", out)
+        self.assertEqual(out["metadata"]["component"]["hashes"][0]["content"], ARTIFACT_SHA)
 
-    def test_refuses_a_null_components_key(self):
-        doc = sbom(TOOLS_OBJECT)
+    def test_accepts_a_null_components_key(self):
+        # Same meaning as absent, and jq's `// []` treats it the same.
+        doc = syft_empty_scan()
         doc["components"] = None
         proc, _ = self.run_script(doc)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_refuses_a_components_key_that_is_not_an_array(self):
+        doc = syft_empty_scan()
+        doc["components"] = "none"
+        proc, _ = self.run_script(doc)
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("no components array", proc.stderr)
+        self.assertIn("components key that is not an array", proc.stderr)
+
+    def test_refuses_a_document_that_is_not_cyclonedx(self):
+        # What a broken scan actually looks like: not a missing
+        # components key, but no syft document envelope at all.
+        proc, _ = self.run_script({"error": "scan failed"})
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("not a CycloneDX document", proc.stderr)
+
+    def test_refuses_a_cyclonedx_document_syft_did_not_write(self):
+        # A well-formed CycloneDX document from some other producer
+        # says nothing about whether this artifact was scanned.
+        doc = syft_empty_scan(tools={"components": [
+            {"type": "application", "name": "some-other-tool", "version": "1.0"},
+        ]})
+        proc, _ = self.run_script(doc)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("does not name syft", proc.stderr)
+
+    def test_refuses_a_document_with_no_tools_at_all(self):
+        doc = syft_empty_scan()
+        del doc["metadata"]["tools"]
+        proc, _ = self.run_script(doc)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("does not name syft", proc.stderr)
+
+    def test_refuses_an_empty_spec_version(self):
+        doc = syft_empty_scan()
+        doc["specVersion"] = ""
+        proc, _ = self.run_script(doc)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("not a CycloneDX document", proc.stderr)
+
+    def test_still_refuses_dependencies_in_the_empty_scan_shape(self):
+        # The zero-component rule survives the fix: absent is zero, but
+        # a populated components list is still a drifted scan target.
+        doc = syft_empty_scan()
+        doc["components"] = [{"type": "library", "name": "some-action", "version": "v1"}]
+        proc, _ = self.run_script(doc)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("expected zero dependency components", proc.stderr)
 
     def test_accepts_the_repository_licence_as_it_stands(self):
         # Guards the v0.4.1 restoration too: if LICENSE drifts from the
