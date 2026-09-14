@@ -47,7 +47,7 @@ Every tagged release attaches, for `zopa-<tag>.wasm`:
 | `.cdx.json.sigstore.json` | Keyless cosign bundle over the SBOM. |
 
 ```bash
-tag=v0.4.1
+tag=v0.5.0
 base="https://github.com/kanywst/zopa/releases/download/$tag"
 curl -fsSLO \
   "$base/zopa-$tag.wasm" \
