@@ -2,7 +2,7 @@
 
 [OpenID AuthZEN Authorization API 1.0][spec] became an OpenID Final Specification on 12 January 2026. It standardises the wire format between a Policy Enforcement Point (PEP) and a Policy Decision Point (PDP), so a PEP can be pointed at any compliant PDP without knowing how it decides.
 
-zopa is not an AuthZEN server -- it has no HTTP surface, by design. What it is is the part in the middle: a ~60 KB decision function that takes a JSON document and returns allow/deny. An AuthZEN Access Evaluation request *is* that JSON document, so the mapping needs no adapter code.
+zopa is not an AuthZEN server -- it has no HTTP surface, by design. What it is is the part in the middle: a ~69 KB decision function that takes a JSON document and returns allow/deny. An AuthZEN Access Evaluation request *is* that JSON document, so the mapping needs no adapter code.
 
 This page documents the mapping and the one edge that isn't a mapping (the error case).
 

@@ -4,6 +4,18 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-14
+
+Two features that move what a policy can say, and a run of fail-closed corrections around them.
+
+**Rego reach**: `:=` assignment and array indexing were the two idioms the coverage table named as practically missing. Both work now, taking `zig build test-coverage` from 32/48 to 36/52.
+
+**Deployment shape**: the proxy-wasm filter accepts a `targets[]` block naming which `(package, rule)` pairs each phase evaluates and whether a deny enforces -- the audit-alongside-enforcement case. The bare-AST configuration is unchanged and still behaves identically.
+
+Upgrading is safe for an existing deployment, with one thing to check: a bare configuration that defines `allow_body` or `allow_response` in a package other than the implicit `""` now fails to start rather than denying every body. That rule could never fire, and the shim used to deny on it silently.
+
+Release build: ~69 KB, up from ~63.
+
 ### Added
 
 - **`targets[]` in the proxy-wasm plugin configuration.** A deployment can now name which `(package, rule)` pairs each phase evaluates, and whether a deny enforces or is only recorded -- the audit-alongside-enforcement case `docs/proposals/multiple-policies.md` was written for, and the last of that proposal's goals.
@@ -195,7 +207,8 @@ First tagged release. Public surface (export names, AST schema, callback semanti
 
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
-[Unreleased]: https://github.com/kanywst/zopa/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/kanywst/zopa/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kanywst/zopa/releases/tag/v0.5.0
 [0.4.1]: https://github.com/kanywst/zopa/releases/tag/v0.4.1
 [0.4.0]: https://github.com/kanywst/zopa/releases/tag/v0.4.0
 [0.3.1]: https://github.com/kanywst/zopa/releases/tag/v0.3.1
