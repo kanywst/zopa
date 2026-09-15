@@ -17,6 +17,18 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 [authzen]: https://openid.net/specs/authorization-api-1_0.html
 [pw]: https://github.com/proxy-wasm/spec
 
+## Done in v0.5.0
+
+- **`targets[]` in the proxy-wasm plugin configuration.** A deployment names which `(package, rule)` pairs each phase evaluates and whether a deny enforces, so an audit rule can ride alongside the enforcing one on the same input without becoming a way to fail a request. Enforcing targets are ANDed; advisory ones never block, which is the one place the shim deliberately does not fail closed, and why `deny` is the default. The bare-AST configuration is unchanged. This closes the last open goal of `docs/proposals/multiple-policies.md`.
+- **`:=` assignment and array indexing.** The two Rego idioms the coverage table named as practically missing. `zig build test-coverage` goes from 32/48 constructs to 36/52.
+
+## Done in v0.4.x
+
+- **Cross-engine benchmark.** `zig build bench` runs zopa (both generic-ABI shapes), OPA compiled to wasm, an OPA HTTP sidecar, and Cedar over the same fixtures, gated on every engine agreeing on the decision before anything is timed. Reports p50/p95/p99, an uninstrumented amortised cost, throughput, memory after warm-up, deployed artifact size, and cold start. `bench/results/baseline.json` turns it into a regression gate in CI. Numbers and caveats in [`bench/README.md`](bench/README.md).
+- **Compiled-policy export.** `policy_compile` / `policy_release` / `evaluate_compiled` / `evaluate_compiled_addressed` let a generic-ABI host build a policy once and evaluate against a handle, which is what the proxy-wasm path has always done internally. This was the benchmark's clearest finding: through `evaluate` zopa answered the RBAC fixture in 5.76 us against OPA-in-wasm's 2.24; against a held policy it answers in 1.32. The AST parse was the entire difference.
+- **`zig build test-coverage`: which Rego constructs the converter reaches.** The coverage ledger the conformance harness was supposed to double as, made explicit — and it immediately found four constructs (`with`, partial rules, `else`, function definitions) that `rego2ast.py` was converting with exit 0 while changing what they mean.
+- **Supply chain.** Releases carry a signed CycloneDX SBOM alongside the wasm, its sha256, a cosign bundle and SLSA v1.0 provenance. `LICENSE` was restored to the canonical Apache License 2.0 text after three years of shipping a paraphrase. `SECURITY.md` documents verifying a release end to end.
+
 ## Done in v0.3.0
 
 - **Fail-closed everywhere.** Six paths could reach "allow" without having decided: an oversized body, a chunked body evaluated on its tail, a body the host would not hand over, a header map that would not decode, an empty plugin configuration, and a deny that returned `Continue` after answering the request. All deny now. See the `CHANGELOG.md` entry for 0.3.0.
@@ -40,10 +52,8 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 
 ## Near term
 
-- **Cross-engine benchmark.** `zig build bench` now runs zopa (both generic-ABI shapes), OPA compiled to wasm, an OPA HTTP sidecar, and Cedar over the same fixtures, gated on every engine agreeing on the decision before anything is timed. Reports p50/p95/p99, an uninstrumented amortised cost, throughput, memory after warm-up, deployed artifact size, and cold start. Numbers and caveats in [`bench/README.md`](bench/README.md).
-- **Compiled-policy export.** `policy_compile` / `policy_release` / `evaluate_compiled` / `evaluate_compiled_addressed` let a generic-ABI host build a policy once and evaluate against a handle, which is what the proxy-wasm path has always done internally. This was the benchmark's clearest finding: through `evaluate` zopa answered the RBAC fixture in 5.76 us against OPA-in-wasm's 2.24; against a held policy it answers in 1.32. The AST parse was the entire difference.
 - **Streaming evaluation runtime.** Build on the body-deps analyser to skip body buffering when no body refs exist, or short-circuit as soon as referenced prefixes resolve. Design in `docs/proposals/streaming-evaluation.md`.
-- **Conformance corpus expansion.** Vendor a slice of the OPA upstream test corpus and grow `tools/rego2ast.py` to cover enough of the Rego subset for `pass / total` to become a meaningful coverage number.
+- **Conformance corpus expansion.** `zig build test-coverage` now answers "which constructs" (36 of 52 as of v0.5.0), so the number exists. What is still missing is breadth: vendor a slice of the OPA upstream test corpus rather than a hand-written probe, and close the constructs the ledger reports as out of reach.
 - **Structured response replacement.** Surface a `json.Value` from the evaluator so a denied `allow_response` rule can return `{status, body, headers}` instead of the fixed 503.
 - **Per-context request snapshot.** Surface `:method` / `:path` / selected headers under `proxy_on_request_body` so body rules can reason about request context too.
 
