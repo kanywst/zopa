@@ -20,9 +20,10 @@ import * as zopaCompiled from './engines/zopa-compiled.mjs';
 import * as opaWasm from './engines/opa-wasm.mjs';
 import * as opaHttp from './engines/opa-http.mjs';
 import * as cedar from './engines/cedar.mjs';
+import * as cedarNative from './engines/cedar-native.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ALL_ENGINES = [zopa, zopaCompiled, opaWasm, opaHttp, cedar];
+const ALL_ENGINES = [zopa, zopaCompiled, opaWasm, opaHttp, cedar, cedarNative];
 
 // ---------------------------------------------------------------- args
 
@@ -52,6 +53,12 @@ const opts = parseArgs(process.argv.slice(2));
 const BUDGET = opts.quick
   ? { warmup: 50, iters: 300, throughputMs: 150, throughputRuns: 3 }
   : { warmup: 1000, iters: 10_000, throughputMs: 1500, throughputRuns: 5 };
+
+// Engines that measure themselves need the budget the rest of the harness is
+// running under, or their row would be sharpened differently from the ones it
+// sits beside. It rides on `opts` because that is what `setup` already
+// receives; engines timed from here ignore it.
+opts.budget = BUDGET;
 
 // -------------------------------------------------------------- stats
 
@@ -226,6 +233,30 @@ for (const fixture of fixtures) {
 
     if (disagreements === 0) {
       for (const { mod, inst } of engines) {
+        // An engine whose cost cannot be observed from this process supplies
+        // its own row instead: `cedar-native` is a separate binary, and a
+        // pipe round trip inside the timed loop would be larger than every
+        // engine here put together.
+        if (mod.measure) {
+          // Same contract as a failed `setup`: one engine that cannot
+          // produce a row loses its row, not everyone else's. Without
+          // this the throw would escape the per-fixture `try` -- whose
+          // `finally` only closes instances -- and take the whole run
+          // down along with every result not yet printed.
+          try {
+            results.push({
+              fixture: fixture.name,
+              engine: mod.id,
+              label: mod.label,
+              decision: decisions.get(mod.id),
+              ...(await mod.measure(fixture, BUDGET, opts)),
+            });
+          } catch (err) {
+            console.error(`  ${fixture.name} / ${mod.id}: measure failed -- ${err.message}`);
+            process.exitCode = 1;
+          }
+          continue;
+        }
         for (let k = 0; k < BUDGET.warmup; k++) await inst.decide();
         const opsPerSec = await throughput(inst, mod);
         results.push({
@@ -282,6 +313,22 @@ for (const r of results) {
 console.log('\n`amort` is the uninstrumented per-decision cost (1s loop / count). Where it sits');
 console.log('well below p50, the clock reads around each iteration are most of what p50 measured;');
 console.log('trust amort for the level and the percentiles for the shape of the tail.');
+
+// Rows an engine measured itself, and what the number excludes. Printing this
+// only when such a row ran keeps the default output unchanged.
+const selfMeasured = results.filter((r) => r.evalOnlyMicros != null);
+if (selfMeasured.length) {
+  console.log('\nself-measured rows (timed inside the engine, not from this process):\n');
+  for (const r of selfMeasured) {
+    console.log(
+      `  ${pad(r.fixture, 16)} ${pad(r.engine, 14)} ${num(r.amortizedMicros, 7)} us end to end, ` +
+      `${num(r.evalOnlyMicros, 7)} us evaluating a request it already holds`,
+    );
+  }
+  console.log('\nThe gap is what the engine spends turning a request into its own value types.');
+  console.log('The end-to-end figure is the comparable one: every other row is also charged for');
+  console.log('parsing its input.');
+}
 
 console.log('\nper engine: throughput (single sequential caller), memory after warm-up, cold start\n');
 console.log(`${pad('fixture', 16)}| ${pad('engine', 14)}|      ops/s | mem KiB | artifact KiB | cold ms`);

@@ -1,0 +1,18 @@
+[package]
+name = "zopa-bench-cedar"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Measures Cedar's evaluator natively, for one row of zopa's cross-engine benchmark"
+license = "Apache-2.0"
+
+[dependencies]
+cedar-policy = "4"
+serde_json = "1"
+
+# The row this produces is a latency figure. A debug build would measure
+# the absence of optimisation, so there is no useful debug profile here.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

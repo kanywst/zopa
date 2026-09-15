@@ -77,24 +77,24 @@ zopa appears twice, because the two generic-ABI shapes cost very different amoun
 
 Per-decision cost, microseconds:
 
-| Policy                                        | zopa (evaluate) | zopa (compiled) | OPA (wasm) | Cedar (wasm) | OPA (sidecar) |
-| --------------------------------------------- | --------------- | --------------- | ---------- | ------------ | ------------- |
-| literal `allow = true`                        | 0.33            | **0.09**        | 0.84       | 11.3         | 127           |
-| `input.method == "GET"`                       | 0.97            | **0.20**        | 0.96       | 14.8         | 131           |
-| default-deny RBAC: path prefix + role + perms | 5.78            | **1.33**        | 2.23       | 53.4         | 148           |
+| Policy                                        | zopa (evaluate) | zopa (compiled) | OPA (wasm) | Cedar (native) | Cedar (wasm) | OPA (sidecar) |
+| --------------------------------------------- | --------------- | --------------- | ---------- | -------------- | ------------ | ------------- |
+| literal `allow = true`                        | 0.35            | **0.09**        | 0.86       | 2.83           | 11.9         | 140           |
+| `input.method == "GET"`                       | 1.00            | **0.21**        | 0.99       | 5.26           | 15.6         | 133           |
+| default-deny RBAC: path prefix + role + perms | 5.87            | **1.37**        | 2.26       | 34.8           | 52.4         | 157           |
 
 | | zopa | OPA (wasm) | OPA (sidecar) |
 | --- | --- | --- | --- |
 | deployed artifact | **69 KB**, all policies | 131 KB **per policy** | — |
 | memory after warm-up | 1.3-1.6 MB | **128 KB** | 23 MB |
-| cold start | **0.4 ms** | 0.5 ms | 55-60 ms |
+| cold start | **0.4-0.9 ms** | 0.6-2.2 ms | 60-190 ms |
 
 What those say:
 
-- **Compile the policy once if you serve traffic.** The gap between the two zopa columns is the AST parse and nothing else: 4.5 µs of the 5.78 on the RBAC row. `evaluate` is for tests, one-shot callers, and hosts that genuinely get a different policy every time.
-- **Held that way, zopa is faster than OPA's wasm build on every fixture,** and 1.7x faster on the realistic one. Through `evaluate` it was 2.6x slower on that same row -- the parse was the whole difference.
+- **Compile the policy once if you serve traffic.** The gap between the two zopa columns is the AST parse and nothing else: 4.5 µs of the 5.87 on the RBAC row. `evaluate` is for tests, one-shot callers, and hosts that genuinely get a different policy every time.
+- **Held that way, zopa is faster than OPA's wasm build on every fixture,** and 1.6x faster on the realistic one. Through `evaluate` it was 2.6x slower on that same row -- the parse was the whole difference.
 - **Against a sidecar, either in-process engine wins by ~100x.** That is the claim zopa is built on. It is also the least interesting row: it compares a TCP round trip to a function call.
-- **The Cedar column is not a verdict on Cedar.** Its policy set is preparsed, so this is not a parse cost; what remains is mostly the wasm-bindgen serialisation boundary that `@cedar-policy/cedar-wasm` puts between Node and the evaluator. It measures Cedar *through its WASM binding*, which is the only way to reach it from Node. A native embedding would look different.
+- **Neither Cedar column is a verdict on Cedar's evaluator.** The WASM binding costs it 3-4x over a native `cedar-policy` embedding, and what remains after that is request conversion, not evaluation: Cedar answers the RBAC fixture in **1.63 µs** once it holds the request -- 1.2x `zopa (compiled)`. The rest is `Context::from_json_value` turning a JSON document into Cedar's typed values. Cedar expects a request assembled from typed application state; zopa and OPA expect one that arrives as JSON on the wire. Both columns are in `bench/README.md` with the split shown.
 - **zopa holds more WASM memory than OPA's module does** -- ~1.4 MB against 128 KB. The arena is reset with `.retain_capacity`, trading a steady-state floor for never calling `memory.grow` again. A smaller binary does not imply a smaller runtime footprint.
 
 Every row is reproducible from a clean checkout, but the machine is a developer laptop: treat the ratios as the signal and re-run `zig build bench` on your own hardware before quoting an absolute number. Full method, and what is deliberately not measured, in [`bench/README.md`](bench/README.md).

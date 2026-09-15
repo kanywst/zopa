@@ -33,3 +33,8 @@ CLAUDE.local.md
 .mcp.json
 bench-smoke.json
 node_modules/
+
+# The native Cedar benchmark harness builds here. Cargo.lock IS tracked --
+# the row it produces is a latency number, so which cedar-policy built it
+# has to be recoverable.
+bench/native/cedar/target/
