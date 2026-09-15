@@ -108,7 +108,16 @@ function build() {
   if (!existsSync(BINARY)) {
     process.stderr.write('  cedar-native: building bench/native/cedar (first run, ~1-2 min)...\n');
   }
-  execFileSync('cargo', ['build', '--release'], { cwd: CRATE, stdio: ['ignore', 'ignore', 'inherit'] });
+  // --locked, because available() has already read the cedar-policy version
+  // out of Cargo.lock by this point. A plain `cargo build` re-resolves and
+  // rewrites the lockfile when it disagrees with Cargo.toml, so the row
+  // would be measured against a dependency graph other than the one
+  // reported -- the same defect as a stale binary, moved one step along.
+  // Drift should stop the run and say so, not be quietly fixed under it.
+  execFileSync('cargo', ['build', '--release', '--locked'], {
+    cwd: CRATE,
+    stdio: ['ignore', 'ignore', 'inherit'],
+  });
 }
 
 function runHarness(budget) {
