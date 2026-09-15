@@ -72,10 +72,17 @@ export async function available(opts) {
     };
   }
   const cargo = cargoVersion();
-  if (!cargo && !existsSync(BINARY)) {
-    return { ok: false, reason: 'cargo not on PATH and no prebuilt harness in bench/native/cedar/target' };
+  if (!cargo) {
+    if (!existsSync(BINARY)) {
+      return { ok: false, reason: 'cargo not on PATH and no prebuilt harness in bench/native/cedar/target' };
+    }
+    // Without cargo there is no way to know the prebuilt binary was
+    // built from the Cargo.lock sitting next to it, so the version is
+    // not claimed. Printing one from the lockfile here would attach a
+    // version to a measurement that may not have come from it.
+    return { ok: true, note: 'prebuilt harness; cedar-policy version unverified (no cargo to rebuild with)' };
   }
-  return { ok: true, note: `cedar-policy ${cedarVersion()}${cargo ? `, ${cargo}` : ', prebuilt'}` };
+  return { ok: true, note: `cedar-policy ${cedarVersion()}, ${cargo}` };
 }
 
 export function supports(fixture) {
@@ -87,9 +94,20 @@ export function supports(fixture) {
 // the warm-up N times over for the same numbers.
 let pending = null;
 
+// Cargo decides whether a rebuild is needed, not a check for the binary's
+// existence. "It exists, so use it" would keep reporting numbers from the
+// old build after a `cedar-policy` bump in Cargo.lock or an edit to the
+// timing logic in main.rs -- and `available()` would print the *new*
+// lockfile version beside a row the *old* binary measured. That is an
+// unmeasured claim attached to a measurement, which is the thing this whole
+// engine exists to remove. An up-to-date tree makes this a fraction of a
+// second; cargo's own stderr is passed through so a real rebuild is visible
+// rather than looking like a hang.
 function build() {
-  if (existsSync(BINARY)) return;
-  process.stderr.write('  cedar-native: building bench/native/cedar (first run, ~1-2 min)...\n');
+  if (!cargoVersion()) return; // available() already vouched for a prebuilt binary
+  if (!existsSync(BINARY)) {
+    process.stderr.write('  cedar-native: building bench/native/cedar (first run, ~1-2 min)...\n');
+  }
   execFileSync('cargo', ['build', '--release'], { cwd: CRATE, stdio: ['ignore', 'ignore', 'inherit'] });
 }
 
