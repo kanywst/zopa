@@ -238,13 +238,23 @@ for (const fixture of fixtures) {
         // pipe round trip inside the timed loop would be larger than every
         // engine here put together.
         if (mod.measure) {
-          results.push({
-            fixture: fixture.name,
-            engine: mod.id,
-            label: mod.label,
-            decision: decisions.get(mod.id),
-            ...(await mod.measure(fixture, BUDGET, opts)),
-          });
+          // Same contract as a failed `setup`: one engine that cannot
+          // produce a row loses its row, not everyone else's. Without
+          // this the throw would escape the per-fixture `try` -- whose
+          // `finally` only closes instances -- and take the whole run
+          // down along with every result not yet printed.
+          try {
+            results.push({
+              fixture: fixture.name,
+              engine: mod.id,
+              label: mod.label,
+              decision: decisions.get(mod.id),
+              ...(await mod.measure(fixture, BUDGET, opts)),
+            });
+          } catch (err) {
+            console.error(`  ${fixture.name} / ${mod.id}: measure failed -- ${err.message}`);
+            process.exitCode = 1;
+          }
           continue;
         }
         for (let k = 0; k < BUDGET.warmup; k++) await inst.decide();

@@ -139,10 +139,26 @@ function runHarness(budget) {
   return byName;
 }
 
+let failure = null;
+
 function rows(budget) {
   // The budget is fixed for a whole `run.mjs` invocation, so caching the first
   // result cannot serve numbers measured under a different one.
-  if (pending === null) pending = runHarness(budget);
+  //
+  // The failure is cached too. run.mjs calls setup() once per fixture, so a
+  // build that cannot succeed -- a lockfile out of sync with Cargo.toml, a
+  // cold crate cache with no network -- would otherwise be retried from
+  // scratch for every fixture, printing the same cargo error three times and
+  // waiting for it each time.
+  if (failure) throw failure;
+  if (pending === null) {
+    try {
+      pending = runHarness(budget);
+    } catch (err) {
+      failure = err;
+      throw err;
+    }
+  }
   return pending;
 }
 

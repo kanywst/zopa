@@ -65,6 +65,8 @@ zig build bench -- --engines=zopa,zopa-compiled,cedar,cedar-native
 ZOPA_BENCH_CEDAR_NATIVE=1 zig build bench
 ```
 
+The build is `cargo build --release --locked`, so a `Cargo.lock` out of sync with `Cargo.toml` — a `cedar-policy` bump that forgot to re-lock, say — is a hard error rather than a silent re-resolve against a graph other than the one reported. That failure costs this engine its rows and makes the run exit non-zero; every other engine still runs and still reports, the same as any `setup` failure.
+
 It is also the one engine this harness does not time. `run.mjs` times `decide()` inside the Node process, and driving a Rust child from there would put a pipe round trip — tens of microseconds — inside the timed path, which is larger than every in-process engine here put together. So `native/cedar` measures itself under the same budget, with the same clock-read floor subtraction and the same best-of-N throughput windows, and the engine module reports what it found; the agreement gate still checks its decision, because correctness has no deadline. Any engine can do this by exporting `measure()`.
 
 ## Regression gate
