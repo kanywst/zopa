@@ -17,6 +17,10 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 [authzen]: https://openid.net/specs/authorization-api-1_0.html
 [pw]: https://github.com/proxy-wasm/spec
 
+## Unreleased
+
+- **Cedar measured natively.** `bench/native/cedar` links `cedar-policy` in and times itself, so the benchmark no longer has to caveat its Cedar row as a measurement of the WASM binding. The binding was costing Cedar 3-4x; what is left after that is request conversion rather than evaluation, and Cedar's evaluator answers the RBAC fixture in 1.63 us against `zopa-compiled`'s 1.37. Opt-in, since building it pulls ~100 crates. This closes the last item of `docs/proposals/benchmark-harness.md`.
+
 ## Done in v0.5.0
 
 - **`targets[]` in the proxy-wasm plugin configuration.** A deployment names which `(package, rule)` pairs each phase evaluates and whether a deny enforces, so an audit rule can ride alongside the enforcing one on the same input without becoming a way to fail a request. Enforcing targets are ANDed; advisory ones never block, which is the one place the shim deliberately does not fail closed, and why `deny` is the default. The bare-AST configuration is unchanged. This closes the last open goal of `docs/proposals/multiple-policies.md`.
@@ -59,7 +63,6 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 
 ## Medium term
 
-- **Cedar measured natively.** Cedar is in the benchmark now, through `@cedar-policy/cedar-wasm` with the policy set preparsed, but the wasm-bindgen serialisation boundary dominates that number rather than the evaluator. A `cedar-policy` embedding in Rust would measure the engine instead, at the cost of a second harness in a second language for one row.
 - **Per-root-context policies.** `proxy_on_configure` currently ignores the root context id, so a VM shared by two filter configurations (an explicit shared `vm_id`) keeps only the last policy. Supporting more than one needs a root-context table plus a stream→root mapping recorded in `proxy_on_context_create`.
 - **proxy-wasm 0.3.x** when the spec stabilizes (design in `docs/proposals/proxy-wasm-0-3.md`). Still an open milestone upstream as of August 2026; `proxy_on_memory_allocate` is the only vNEXT piece adopted so far.
 - **Reference AuthZEN PDP.** A thin HTTP server -- separate repository -- that exposes `/access/v1/evaluation` over a zopa instance, so the mapping in `docs/authzen.md` has an executable counterpart. Deliberately not part of the wasm module.

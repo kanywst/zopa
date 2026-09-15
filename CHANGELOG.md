@@ -4,6 +4,14 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+### Added
+
+- **Cedar measured natively, not just through its WASM binding.** `bench/README.md` carried a caveat saying the Cedar row was dominated by the wasm-bindgen boundary and that a native embedding "would look different" — a claim with no measurement behind it, in a file whose whole premise is that unmeasured claims do not belong there. `bench/native/cedar` is a Rust harness that links `cedar-policy` in, and it settles the question: the binding was costing Cedar **3-4x** (2.83/5.26/34.8 µs native against 11.9/15.6/52.4 through the binding), so the caveat was right about direction. It was wrong about what remains. Native Cedar is still 25x `zopa-compiled` on the RBAC fixture, and that gap is **not evaluation** — Cedar answers the same fixture in **1.63 µs** once it holds the request, against `zopa-compiled`'s 1.37. The rest is `Context::from_json_value` plus `Request::new` converting a JSON document into Cedar's typed values. That is a design difference, not a slow evaluator: Cedar expects a request assembled from typed application state, zopa and OPA expect one that arrives as JSON on the wire. The README's Cedar bullet said "a native embedding would look different" and now says how.
+
+  The harness times itself. `run.mjs` times `decide()` in the Node process, so driving a Rust child from there would put a pipe round trip — tens of microseconds — inside the timed path, larger than every in-process engine put together. Instead it runs the same budget, the same measured clock-read floor subtraction and the same best-of-N throughput windows, and reports the distribution through a new optional `measure()` export any engine can use. The agreement gate still calls `decide()` across the pipe, because correctness has no deadline.
+
+  Opt-in via `--engines=...,cedar-native` or `ZOPA_BENCH_CEDAR_NATIVE=1`, because building it pulls ~100 crates. CI does not run it and the regression baseline does not include it. Nothing in the wasm module depends on it; `build.zig.zon` still declares no dependencies.
+
 ## [0.5.0] - 2026-09-14
 
 Two features that move what a policy can say, and a run of fail-closed corrections around them.
