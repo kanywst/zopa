@@ -1,6 +1,6 @@
 # Multiple policies per VM
 
-Status: **Implemented.** Goals 1, 2 and 4 shipped in v0.2.0 (the `{"type": "modules"}` bundle, the optional `package` field, and `evaluate_addressed` for fully qualified lookup), and v0.3.0 made dispatch package-scoped. Goal 3 -- the `targets[]` plugin config with a per-target `on_deny` -- landed after v0.4.1: the proxy-wasm shim accepts a `{"policy": ..., "targets": [...]}` wrapper naming which `(package, rule)` pairs each phase evaluates and whether a deny enforces. The bare-AST configuration still works and still behaves identically. See [`docs/proxy-wasm.md`](../proxy-wasm.md). Tracking: ROADMAP.md → Medium term ("Multiple policies").
+Status: **Implemented.** Goals 1, 2 and 4 shipped in v0.2.0 (the `{"type": "modules"}` bundle, the optional `package` field, and `evaluate_addressed` for fully qualified lookup), and v0.3.0 made dispatch package-scoped. Goal 3 -- the `targets[]` plugin config with a per-target `on_deny` -- shipped in v0.5.0: the proxy-wasm shim accepts a `{"policy": ..., "targets": [...]}` wrapper naming which `(package, rule)` pairs each phase evaluates and whether a deny enforces. The bare-AST configuration still works and still behaves identically. See [`docs/proxy-wasm.md`](../proxy-wasm.md). Tracking: ROADMAP.md → Medium term ("Multiple policies").
 
 ## Motivation
 
