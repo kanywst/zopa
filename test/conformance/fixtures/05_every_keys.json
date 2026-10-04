@@ -1,9 +1,0 @@
-{
-  "name":  "every_keys_not_internal",
-  "rego":  "package authz\n\nallow if every k in input.attrs {\n  k != \"internal\"\n}\n",
-  "cases": [
-    { "input": { "attrs": { "team": "sre", "region": "us-east" } }, "expected": 1 },
-    { "input": { "attrs": { "team": "sre", "internal": "yes" } },   "expected": 0 },
-    { "input": { "attrs": {} },                                      "expected": 1 }
-  ]
-}

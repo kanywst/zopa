@@ -266,11 +266,24 @@ def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
     if value is None or value.get("type") != "var":
         raise Unsupported("every: missing iteration variable name")
 
+    # `every k, v in xs` binds the key as well. zopa's `every` binds one
+    # variable, and dropping `k` would leave it a bare ref resolving
+    # against the input. A wildcard (`_`, which OPA renames `$0`) binds
+    # nothing and is fine.
+    key = terms.get("key")
+    if key is not None and not (key.get("type") == "var" and key["value"].startswith("$")):
+        raise Unsupported("`every` with a key binding not supported: zopa binds one variable")
+
     out: dict[str, Any] = {
         "type": "every",
         "var": value["value"],
         "source": domain,
         "body": body_inner,
+        # Rego binds an object's *values* here. zopa's AST defaults to
+        # keys when `kind` is absent, so leaving it out converted
+        # `every v in obj { v != "x" }` into a check of the keys.
+        # Arrays and sets ignore `kind`.
+        "kind": "values",
     }
     return out
 

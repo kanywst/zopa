@@ -1,0 +1,12 @@
+{
+  "name":  "every_values_not_internal",
+  "note":  "`every v in obj` binds the object's values, not its keys. The second and third cases tell the two apart: a key named `internal` passes, a value named `internal` fails. rego2ast used to convert this without `kind`, which zopa reads as keys.",
+  "rego":  "package authz\n\nallow if every v in input.attrs {\n  v != \"internal\"\n}\n",
+  "cases": [
+    { "input": { "attrs": { "team": "sre", "region": "us-east" } }, "expected": 1 },
+    { "input": { "attrs": { "team": "sre", "internal": "yes" } },   "expected": 1 },
+    { "input": { "attrs": { "team": "sre", "scope": "internal" } }, "expected": 0 },
+    { "input": { "attrs": {} },                                      "expected": 1 },
+    { "input": { "attrs": ["sre", "internal"] },                     "expected": 0 }
+  ]
+}

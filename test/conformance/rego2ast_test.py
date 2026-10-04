@@ -95,6 +95,10 @@ class Refusals(unittest.TestCase):
             "allow if {\n\tx := 1\n\tx := 2\n\tx == 2\n}", "assigned twice in one body",
         )
 
+    def test_every_with_a_key_binding_is_refused(self):
+        # Dropping `k` would leave it a bare ref into the input.
+        self.assertRefused('allow if every k, v in input.m { k != "x" }', "key binding")
+
     def test_unnamed_operator_is_described(self):
         # `in` reaches OPA's AST as internal.member_2 and has no bare
         # name; reporting an empty one tells the reader nothing.
@@ -157,6 +161,16 @@ class Conversions(unittest.TestCase):
     def test_every_with_a_single_expression_body(self):
         ast = self.assertConverts("allow if every x in input.xs { x == 1 }")
         self.assertEqual(ast["rules"][0]["body"][0]["type"], "every")
+
+    def test_every_binds_values(self):
+        # Rego's `every v in obj` binds values; zopa defaults to keys
+        # when `kind` is absent, so the converter has to say so.
+        ast = self.assertConverts('allow if every v in input.m { v != "x" }')
+        self.assertEqual(ast["rules"][0]["body"][0]["kind"], "values")
+
+    def test_every_with_a_wildcard_key_converts(self):
+        ast = self.assertConverts('allow if every _, v in input.m { v != "x" }')
+        self.assertEqual(ast["rules"][0]["body"][0]["var"], "v")
 
 
 if __name__ == "__main__":

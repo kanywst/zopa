@@ -12,6 +12,10 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
   Opt-in via `--engines=...,cedar-native` or `ZOPA_BENCH_CEDAR_NATIVE=1`, because building it pulls ~100 crates. CI does not run it and the regression baseline does not include it. Nothing in the wasm module depends on it; `build.zig.zon` still declares no dependencies.
 
+### Fixed
+
+- **`rego2ast.py` converted `every v in obj` into a check of the keys.** Rego binds an object's *values* there. The converter emitted `every` without `kind`, which zopa's AST reads as keys. So `allow if every v in input.attrs { v != "internal" }` denied a request with a key named `internal` and allowed one with a value named `internal`, the opposite of OPA in both directions. The converter now emits `"kind": "values"`; arrays and sets ignore `kind`. `every k, v in obj` is refused rather than converted: the key binding used to be dropped silently, leaving `k` a bare ref into the input. The conformance fixture that pinned the wrong reading, `05_every_keys.json`, is now `05_every_values.json`, with each case checked against `opa eval`. The wasm module is unchanged; re-run `rego2ast.py` on any policy that iterates an object with `every`.
+
 ## [0.5.0] - 2026-09-14
 
 Two features that move what a policy can say, and a run of fail-closed corrections around them.
