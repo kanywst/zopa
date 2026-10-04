@@ -14,6 +14,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ### Fixed
 
+- **`every` over a missing field allowed.** `every` was vacuously true on any source it could not iterate, so `allow if every v in input.attrs { v != "internal" }` allowed a request with no `attrs`, or with `attrs` a string or `null`. OPA does not fire the rule there. Only an empty array, set or object is vacuously true now; an undefined or non-collection source denies.
 - **`rego2ast.py` converted `every v in obj` into a check of the keys.** Rego binds an object's *values* there. The converter emitted `every` without `kind`, which zopa's AST reads as keys. So `allow if every v in input.attrs { v != "internal" }` denied a request with a key named `internal` and allowed one with a value named `internal`, the opposite of OPA in both directions. The converter now emits `"kind": "values"`; arrays and sets ignore `kind`. `every k, v in obj` is refused rather than converted: the key binding used to be dropped silently, leaving `k` a bare ref into the input. The conformance fixture that pinned the wrong reading, `05_every_keys.json`, is now `05_every_values.json`, with each case checked against `opa eval`. The wasm module is unchanged; re-run `rego2ast.py` on any policy that iterates an object with `every`.
 
 ## [0.5.0] - 2026-09-14

@@ -286,6 +286,8 @@ every_admin = dict(some_admin, type="every")
 check("every: all match -> allow", decide({"tags": ["admin", "admin"]}, every_admin), 1)
 check("every: one mismatch -> deny", decide({"tags": ["admin", "guest"]}, every_admin), 0)
 check("every: vacuously true on empty -> allow", decide({"tags": []}, every_admin), 1)
+check("every: missing source does not hold -> deny", decide({}, every_admin), 0)
+check("every: scalar source does not hold -> deny", decide({"tags": "admin"}, every_admin), 0)
 
 every_some = {
     "type": "every",

@@ -229,7 +229,7 @@ Resolves `source` to an array, set, or object, then evaluates `body` once for ea
 }
 ```
 
-Same shape as `some`, but the body must hold for every element. An empty source yields `true` (vacuous). `kind` works as for `some`.
+Same shape as `some`, but the body must hold for every element. An empty array, set or object yields `true` (vacuous). A source that is undefined or is not a collection yields `false`, as in OPA -- a missing field is not "nothing to check". `kind` works as for `some`.
 
 ### `call` -- builtin function
 

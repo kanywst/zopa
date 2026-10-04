@@ -394,8 +394,11 @@ fn evalSome(
     return false;
 }
 
-/// `every x in source: body`. Vacuously true on an empty or
-/// non-iterable source.
+/// `every x in source: body`. Vacuously true on an empty collection, but
+/// false on a source that is undefined or not a collection: OPA does
+/// not fire the rule there, and treating a missing field as "nothing to
+/// check" let `every v in input.attrs { v != "internal" }` allow a
+/// request with no `attrs` at all.
 fn evalEvery(
     it: ast.Expr.Iter,
     input: json.Value,
@@ -404,7 +407,7 @@ fn evalEvery(
 ) HelperError!bool {
     if (depth >= max_eval_depth) return error.EvalTooDeep;
     const items = try iterItems(it.source, it.kind, input, scope, depth + 1);
-    if (items == .none) return true;
+    if (items == .none) return false;
     var i: usize = 0;
     while (i < items.len()) : (i += 1) {
         const child = Scope{ .parent = scope, .name = it.var_name, .bound = items.at(i) };
@@ -959,6 +962,23 @@ test "evaluate: some over object values" {
         "{\"flags\":{\"a\":false,\"b\":false}}",
         policy,
     )));
+}
+
+test "every: an undefined or non-collection source does not hold" {
+    const policy =
+        "{\"type\":\"every\",\"var\":\"v\",\"kind\":\"values\"," ++
+        "\"source\":{\"type\":\"ref\",\"path\":[\"input\",\"attrs\"]}," ++
+        "\"body\":{\"type\":\"neq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"v\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"internal\"}}}";
+    // Checked against `opa eval`: all of these deny.
+    try testing.expect(!(try run("{}", policy)));
+    try testing.expect(!(try run("{\"attrs\":\"ok\"}", policy)));
+    try testing.expect(!(try run("{\"attrs\":null}", policy)));
+    try testing.expect(!(try run("{\"attrs\":5}", policy)));
+    // An empty collection is still vacuously true.
+    try testing.expect(try run("{\"attrs\":[]}", policy));
+    try testing.expect(try run("{\"attrs\":{}}", policy));
 }
 
 test "evaluate: every over object defaults to keys" {

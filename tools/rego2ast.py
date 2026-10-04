@@ -19,6 +19,7 @@ stderr.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from typing import Any
 
@@ -271,7 +272,7 @@ def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
     # against the input. A wildcard (`_`, which OPA renames `$0`) binds
     # nothing and is fine.
     key = terms.get("key")
-    if key is not None and not (key.get("type") == "var" and key["value"].startswith("$")):
+    if key is not None and not (key.get("type") == "var" and re.fullmatch(r"\$\d+", key["value"])):
         raise Unsupported("`every` with a key binding not supported: zopa binds one variable")
 
     out: dict[str, Any] = {

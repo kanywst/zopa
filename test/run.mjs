@@ -324,6 +324,8 @@ const everyAdmin = {
 check('every: all match -> allow', decide({ tags: ['admin', 'admin'] }, everyAdmin), 1);
 check('every: one mismatch -> deny', decide({ tags: ['admin', 'guest'] }, everyAdmin), 0);
 check('every: vacuously true on empty -> allow', decide({ tags: [] }, everyAdmin), 1);
+check('every: missing source does not hold -> deny', decide({}, everyAdmin), 0);
+check('every: scalar source does not hold -> deny', decide({ tags: 'admin' }, everyAdmin), 0);
 
 // some over a set literal in the AST
 const someInLiteralSet = {
