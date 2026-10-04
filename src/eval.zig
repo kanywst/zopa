@@ -558,8 +558,9 @@ fn evalCallLifted(
     depth: u32,
 ) HelperError!?json.Value {
     if (depth >= max_eval_depth) return error.EvalTooDeep;
-    // A call zopa cannot make at all is undefined here, not a `.nil`
-    // answer: negating it would allow. OPA rejects both at compile time.
+    // Unreachable for a built policy (`ast.buildExpr` refuses an unknown
+    // name or a wrong argument count), but undefined rather than `.nil`
+    // if it ever is: negating `.nil` would allow.
     if (c.args.len > max_builtin_args) return null;
     const b = builtins.lookup(c.name) orelse return null;
     var resolved: [max_builtin_args]json.Value = undefined;
@@ -1015,11 +1016,13 @@ test "evaluate: call count compared with gt" {
     try testing.expect(!(try run("{\"perms\":[\"r\"]}", policy)));
 }
 
-test "evaluate: unknown builtin denies" {
+test "evaluate: unknown builtin is refused when the policy is built" {
     const policy =
         "{\"type\":\"call\",\"name\":\"made_up_fn\",\"args\":[" ++
         "{\"type\":\"value\",\"value\":1}]}";
-    try testing.expect(!(try run("{}", policy)));
+    try testing.expectError(error.UnknownBuiltin, run("{}", policy));
+    // Under `not` too: the refusal happens before anything is negated.
+    try testing.expectError(error.UnknownBuiltin, run("{}", "{\"type\":\"not\",\"expr\":" ++ policy ++ "}"));
 }
 
 test "evaluate: every over object keys" {
@@ -1112,17 +1115,22 @@ test "not: an undefined argument to a call fails the body, as in OPA" {
         "\"right\":{\"type\":\"value\",\"value\":true}}}";
     try testing.expect(!(try run("{}", nested)));
 
-    // A call zopa cannot make is undefined under `not`, not a negatable
-    // answer: an unknown builtin, and one past the argument cap.
-    const unknown =
-        "{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"no_such_builtin\",\"args\":[" ++
-        "{\"type\":\"value\",\"value\":1}]}}";
-    try testing.expect(!(try run("{}", unknown)));
+    // A call zopa cannot make never reaches evaluation, negated or not.
     const nine_args =
         "{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"count\",\"args\":[" ++
         ("{\"type\":\"value\",\"value\":1}," ** 8) ++
         "{\"type\":\"value\",\"value\":1}]}}";
-    try testing.expect(!(try run("{}", nine_args)));
+    try testing.expectError(error.BuiltinArity, run("{}", nine_args));
+    try testing.expectError(error.BuiltinArity, run("{}", nine_args["{\"type\":\"not\",\"expr\":".len .. nine_args.len - 1]));
+
+    // `not not` is a Rego parse error, so only hand-built AST has it.
+    // An undefined lifted term fails the inner negation, and the outer
+    // one negates that `false`: pinned so the polarity is deliberate.
+    const not_not =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"path\"]}," ++
+        "{\"type\":\"value\",\"value\":\"/admin\"}]}}}";
+    try testing.expect(try run("{}", not_not));
 
     // A ref compared directly is not lifted, so this negation holds.
     const not_eq =

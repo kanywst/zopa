@@ -370,9 +370,9 @@ check(
     1,
 )
 check(
-    "call unknown builtin -> deny",
+    "call unknown builtin -> -1",
     decide({}, {"type": "call", "name": "made_up_function", "args": [{"type": "value", "value": 1}]}),
-    0,
+    -1,
 )
 
 # ---------------------------------------------------------------------------

@@ -424,16 +424,15 @@ check(
   0,
 );
 
-// unknown builtin: lookup miss resolves to .nil, treated as falsy in
-// body position -> the synthetic `allow` rule fails -> deny (0). The
-// proxy-wasm shim treats any non-1 the same way (deny).
+// unknown builtin: refused when the policy is built, as OPA refuses it
+// at compile time -> -1, which every caller treats as deny.
 check(
-  'call unknown builtin -> deny',
+  'call unknown builtin -> -1',
   decide({}, {
     type: 'call', name: 'made_up_function',
     args: [{ type: 'value', value: 1 }],
   }),
-  0,
+  -1,
 );
 
 // ---------------------------------------------------------------------------

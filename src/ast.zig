@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const json = @import("json.zig");
+const builtins = @import("builtins.zig");
 
 pub const Value = json.Value;
 
@@ -411,6 +412,13 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
         const name = try requireString(obj, "name");
         const args_v = try requireField(obj, "args");
         if (args_v != .array) return error.InvalidArgs;
+        // OPA refuses an unknown function, or one called with the wrong
+        // number of arguments, at compile time. Accepting either here
+        // left the evaluator to pick an answer -- `.nil` in one place,
+        // undefined under `not` -- for a call that has no meaning, so a
+        // policy containing one is rejected before it can decide.
+        const b = builtins.lookup(name) orelse return error.UnknownBuiltin;
+        if (args_v.array.len != b.arity) return error.BuiltinArity;
         const args = try allocator.alloc(*const Expr, args_v.array.len);
         for (args_v.array, 0..) |item, i| {
             args[i] = try buildExpr(allocator, item);
@@ -513,6 +521,15 @@ test "buildExpr: compare canonical and shorthand are equivalent" {
         "\"right\":{\"type\":\"value\",\"value\":1}}");
     try testing.expectEqual(CompareOp.eq, canonical.compare.op);
     try testing.expectEqual(CompareOp.eq, shorthand.compare.op);
+}
+
+test "buildExpr: rejects an unknown builtin and a wrong argument count" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectError(error.UnknownBuiltin, buildExprFromJson(&arena, "{\"type\":\"call\",\"name\":\"made_up_fn\",\"args\":[]}"));
+    try testing.expectError(error.BuiltinArity, buildExprFromJson(&arena, "{\"type\":\"call\",\"name\":\"count\",\"args\":[]}"));
+    try testing.expectError(error.BuiltinArity, buildExprFromJson(&arena, "{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"value\",\"value\":\"a\"}]}"));
 }
 
 test "buildExpr: rejects unknown type" {
