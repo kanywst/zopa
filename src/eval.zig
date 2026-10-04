@@ -979,6 +979,14 @@ test "every: an undefined or non-collection source does not hold" {
     // An empty collection is still vacuously true.
     try testing.expect(try run("{\"attrs\":[]}", policy));
     try testing.expect(try run("{\"attrs\":{}}", policy));
+
+    // `not every` cannot be written in Rego (`illegal negation of
+    // 'every'`), only in hand-built AST. There it negates the boolean,
+    // so a missing source makes it hold: pinned so the polarity is a
+    // decision rather than an accident.
+    const negated = "{\"type\":\"not\",\"expr\":" ++ policy ++ "}";
+    try testing.expect(try run("{}", negated));
+    try testing.expect(!(try run("{\"attrs\":[\"ok\"]}", negated)));
 }
 
 test "evaluate: every over object defaults to keys" {
