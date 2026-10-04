@@ -10,6 +10,7 @@
     { "input": { "path": "/x", "tags": [] },                       "expected": 0 },
     { "input": { "path": "/x", "tags": 1 },                        "expected": 0 },
     { "input": { "path": 1, "tags": ["a"] },                       "expected": 1 },
+    { "input": { "path": null, "tags": ["a"] },                    "expected": 1 },
     { "input": { "path": "/x", "tags": ["a"], "user": "mallory" }, "expected": 0 }
   ]
 }

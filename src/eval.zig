@@ -312,7 +312,10 @@ fn evalExprBool(
             break :blk truthy(v);
         },
         .compare => |c| try evalCompare(c, input, scope, depth + 1),
-        .not => |inner| try evalNot(inner, input, scope, depth + 1),
+        .not => |inner| switch (inner.*) {
+            .call, .compare => try evalNotLifted(inner, input, scope, depth + 1),
+            else => !(try evalExprBool(inner, input, scope, depth + 1)),
+        },
         .some => |it| try evalSome(it, input, scope, depth + 1),
         .every => |it| try evalEvery(it, input, scope, depth + 1),
         .call => |c| truthy(try evalCall(c, input, scope, depth + 1)),
@@ -323,59 +326,51 @@ fn evalExprBool(
     };
 }
 
-/// `not inner`. Rego negation holds when `inner` is undefined, with one
-/// catch the evaluator has to reproduce: OPA's compiler lifts a call's
-/// arguments, and a call used as a comparison operand, out of the
-/// negation into assignments that run before it. When a lifted term is
-/// undefined the body fails there and the negation is never reached, so
-/// `not startswith(input.path, "/admin")` with no path *denies*. Negating
-/// the call's undefined result instead allowed it -- a missing field
-/// turning into access. A ref compared directly is not lifted:
+/// `not inner` where `inner` is a call or a comparison. Rego negation
+/// holds when `inner` is undefined, with one catch: OPA's compiler lifts
+/// a call's arguments, and a call used as a comparison operand, out of
+/// the negation into assignments that run before it. When a lifted term
+/// is undefined the body fails there and the negation is never reached,
+/// so `not startswith(input.path, "/admin")` with no path *denies*.
+/// Negating the call's undefined result instead allowed it -- a missing
+/// field turning into access. A ref compared directly is not lifted:
 /// `not input.missing == "x"` holds, in OPA and here. Each shape checked
 /// against `opa eval` before writing this.
-inline fn evalNot(
+///
+/// Every other negation stays inline in the callers, so a chain of
+/// `not`s pays no extra frame per level.
+fn evalNotLifted(
     inner: *const ast.Expr,
     input: json.Value,
     scope: ?*const Scope,
     depth: u32,
 ) HelperError!bool {
-    // `depth` already counts this `not`; recursing at `depth + 1` here
-    // would charge each negation twice against `max_eval_depth`.
     if (depth >= max_eval_depth) return error.EvalTooDeep;
     switch (inner.*) {
-        .call => |c| for (c.args) |arg| {
-            if (try liftedUndefined(arg, input, scope, depth)) return false;
+        .call => |c| {
+            const v = (try evalCallLifted(c, input, scope, depth + 1)) orelse return false;
+            return !truthy(v);
         },
-        .compare => |c| for ([_]*const ast.Expr{ c.left, c.right }) |operand| {
-            if (operand.* == .call and try liftedUndefined(operand, input, scope, depth)) return false;
+        .compare => |c| {
+            const lhs = (try resolveOperandLifted(c.left, input, scope, depth + 1)) orelse return false;
+            const rhs = (try resolveOperandLifted(c.right, input, scope, depth + 1)) orelse return false;
+            return !compareValues(c.op, lhs, rhs);
         },
-        else => {},
+        else => unreachable,
     }
-    return !(try evalExprBool(inner, input, scope, depth));
 }
 
-/// Whether a term `evalNot` lifts out of the negation is undefined. A
-/// ref has to go through `resolveRef`, since `resolveValue` folds a
-/// missing path into the same `.nil` as an explicit JSON null, and OPA
-/// lifts a null without failing. A call yields `.nil` only when it could
-/// not compute, which OPA calls undefined.
-fn liftedUndefined(
-    term: *const ast.Expr,
+/// A comparison operand under `not`. A call is lifted, so `null` when it
+/// is undefined; anything else resolves as usual.
+fn resolveOperandLifted(
+    operand: *const ast.Expr,
     input: json.Value,
     scope: ?*const Scope,
     depth: u32,
-) HelperError!bool {
-    return switch (term.*) {
-        .ref => |path| blk: {
-            _ = resolveRef(input, scope, path) catch |err| switch (err) {
-                error.PathNotFound, error.PathNotObject => break :blk true,
-                else => return err,
-            };
-            break :blk false;
-        },
-        .call => (try resolveValue(term, input, scope, depth)) == .nil,
-        else => false,
-    };
+) HelperError!?json.Value {
+    const v = try resolveValue(operand, input, scope, depth);
+    if (operand.* == .call and v == .nil) return null;
+    return v;
 }
 
 fn evalCompare(
@@ -387,12 +382,16 @@ fn evalCompare(
     if (depth >= max_eval_depth) return error.EvalTooDeep;
     const lhs = try resolveValue(c.left, input, scope, depth + 1);
     const rhs = try resolveValue(c.right, input, scope, depth + 1);
-    return switch (c.op) {
+    return compareValues(c.op, lhs, rhs);
+}
+
+fn compareValues(op: ast.CompareOp, lhs: json.Value, rhs: json.Value) bool {
+    return switch (op) {
         .eq => json.valueEquals(lhs, rhs),
         .neq => !json.valueEquals(lhs, rhs),
         .lt, .lte, .gt, .gte => blk: {
             const ord = json.valueCompare(lhs, rhs) orelse break :blk false;
-            break :blk switch (c.op) {
+            break :blk switch (op) {
                 .lt => ord == .lt,
                 .lte => ord != .gt,
                 .gt => ord == .gt,
@@ -511,7 +510,10 @@ fn resolveValue(
             else => return err,
         },
         .compare => |c| .{ .boolean = try evalCompare(c, input, scope, depth + 1) },
-        .not => |inner| .{ .boolean = try evalNot(inner, input, scope, depth + 1) },
+        .not => |inner| .{ .boolean = switch (inner.*) {
+            .call, .compare => try evalNotLifted(inner, input, scope, depth + 1),
+            else => !(try evalExprBool(inner, input, scope, depth + 1)),
+        } },
         .some => |it| .{ .boolean = try evalSome(it, input, scope, depth + 1) },
         .every => |it| .{ .boolean = try evalEvery(it, input, scope, depth + 1) },
         .call => |c| try evalCall(c, input, scope, depth + 1),
@@ -531,6 +533,35 @@ fn evalCall(
     var resolved: [max_builtin_args]json.Value = undefined;
     for (c.args, 0..) |arg, i| {
         resolved[i] = try resolveValue(arg, input, scope, depth + 1);
+    }
+    return builtins.dispatch(b, resolved[0..c.args.len]);
+}
+
+/// `evalCall` for a call whose arguments OPA lifts out of an enclosing
+/// `not`: `null` when one of them is undefined, rather than the
+/// builtin's answer to it. A ref has to go through `resolveRef`, since
+/// `resolveValue` folds a missing path into the same `.nil` as an
+/// explicit JSON null, and OPA lifts a null without failing. A call
+/// yields `.nil` only when it could not compute, which OPA calls
+/// undefined. Each argument is resolved once.
+fn evalCallLifted(
+    c: ast.Expr.Call,
+    input: json.Value,
+    scope: ?*const Scope,
+    depth: u32,
+) HelperError!?json.Value {
+    if (depth >= max_eval_depth) return error.EvalTooDeep;
+    if (c.args.len > max_builtin_args) return .nil;
+    const b = builtins.lookup(c.name) orelse return .nil;
+    var resolved: [max_builtin_args]json.Value = undefined;
+    for (c.args, 0..) |arg, i| {
+        resolved[i] = switch (arg.*) {
+            .ref => |path| resolveRef(input, scope, path) catch |err| switch (err) {
+                error.PathNotFound, error.PathNotObject => return null,
+                else => return err,
+            },
+            else => (try resolveOperandLifted(arg, input, scope, depth + 1)) orelse return null,
+        };
     }
     return builtins.dispatch(b, resolved[0..c.args.len]);
 }
@@ -1043,6 +1074,24 @@ test "not: an undefined argument to a call fails the body, as in OPA" {
     try testing.expect(!(try run("{\"xs\":1}", not_count_zero)));
     try testing.expect(try run("{\"xs\":[1]}", not_count_zero));
     try testing.expect(!(try run("{\"xs\":[]}", not_count_zero)));
+
+    // An array index past the end is as undefined as a missing field.
+    const not_index =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"a\",5]}," ++
+        "{\"type\":\"value\",\"value\":\"x\"}]}}";
+    try testing.expect(!(try run("{\"a\":[]}", not_index)));
+
+    // The same lifting applies where the negation is a value rather than
+    // a body expression -- the other path into `evalNotLifted`.
+    const as_value =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"path\"]}," ++
+        "{\"type\":\"value\",\"value\":\"/admin\"}]}}," ++
+        "\"right\":{\"type\":\"value\",\"value\":true}}";
+    try testing.expect(!(try run("{}", as_value)));
+    try testing.expect(try run("{\"path\":\"/x\"}", as_value));
 
     // A ref compared directly is not lifted, so this negation holds.
     const not_eq =
