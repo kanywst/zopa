@@ -1154,6 +1154,25 @@ check("assign: a call that could not compute denies", decide({}, call_policy), 0
 check("assign: an explicit null binds", decide({"user": {"role": None}}, null_policy), 1)
 check("assign: a missing path does not bind", decide({"user": {}}, null_policy), 0)
 
+# `in`: membership in an array, a set, or an object's values. Rego spells
+# it as a call, so under `not` a missing operand fails the body. Each
+# case checked against `opa eval`.
+in_policy = {"type": "in", "left": {"type": "ref", "path": ["input", "x"]},
+             "right": {"type": "ref", "path": ["input", "xs"]}}
+check("in: element of an array", decide({"x": "ops", "xs": ["dev", "ops"]}, in_policy), 1)
+check("in: not an element", decide({"x": "qa", "xs": ["dev", "ops"]}, in_policy), 0)
+check("in: an object value", decide({"x": "ops", "xs": {"a": "ops"}}, in_policy), 1)
+check("in: an object key is not a member", decide({"x": "a", "xs": {"a": "ops"}}, in_policy), 0)
+check("in: a string is not a collection", decide({"x": "a", "xs": "abc"}, in_policy), 0)
+check("in: null in [null]", decide({"x": None, "xs": [None]}, in_policy), 1)
+check("in: undefined needle", decide({"xs": [None]}, in_policy), 0)
+
+not_in = {"type": "not", "expr": in_policy}
+check("not in: absent from the list", decide({"x": "a", "xs": ["b"]}, not_in), 1)
+check("not in: on the list", decide({"x": "b", "xs": ["b"]}, not_in), 0)
+check("not in: missing needle fails the body", decide({"xs": ["b"]}, not_in), 0)
+check("not in: missing list fails the body", decide({"x": "a"}, not_in), 0)
+
 if failed:
     print(f"\n{failed} test(s) failed", file=sys.stderr)
     sys.exit(1)

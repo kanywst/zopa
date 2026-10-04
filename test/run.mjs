@@ -1209,6 +1209,28 @@ check(
 );
 
 
+// ---------------------------------------------------------------------------
+// 19. `in`: membership in an array, a set, or an object's values. Rego
+//     spells it as a call, so under `not` a missing operand fails the
+//     body. Each case checked against `opa eval`.
+// ---------------------------------------------------------------------------
+{
+  const inPolicy = { type: 'in', left: { type: 'ref', path: ['input', 'x'] }, right: { type: 'ref', path: ['input', 'xs'] } };
+  check('in: element of an array', decide({ x: 'ops', xs: ['dev', 'ops'] }, inPolicy), 1);
+  check('in: not an element', decide({ x: 'qa', xs: ['dev', 'ops'] }, inPolicy), 0);
+  check('in: an object value', decide({ x: 'ops', xs: { a: 'ops' } }, inPolicy), 1);
+  check('in: an object key is not a member', decide({ x: 'a', xs: { a: 'ops' } }, inPolicy), 0);
+  check('in: a string is not a collection', decide({ x: 'a', xs: 'abc' }, inPolicy), 0);
+  check('in: null in [null]', decide({ x: null, xs: [null] }, inPolicy), 1);
+  check('in: undefined needle', decide({ xs: [null] }, inPolicy), 0);
+
+  const notIn = { type: 'not', expr: inPolicy };
+  check('not in: absent from the list', decide({ x: 'a', xs: ['b'] }, notIn), 1);
+  check('not in: on the list', decide({ x: 'b', xs: ['b'] }, notIn), 0);
+  check('not in: missing needle fails the body', decide({ xs: ['b'] }, notIn), 0);
+  check('not in: missing list fails the body', decide({ x: 'a' }, notIn), 0);
+}
+
 if (failed > 0) {
   console.error(`\n${failed} test(s) failed`);
   exit(1);

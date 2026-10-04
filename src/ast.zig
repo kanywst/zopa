@@ -42,6 +42,7 @@ pub const Expr = union(enum) {
     every: Iter,
     call: Call,
     assign: Assign,
+    member: Member,
 
     /// Largest accepted array index, fixed rather than
     /// `maxInt(usize)`.
@@ -83,6 +84,16 @@ pub const Expr = union(enum) {
     pub const Assign = struct {
         var_name: []const u8,
         value: *const Expr,
+    };
+
+    /// `left in right` in Rego: true when `right` is an array or set
+    /// holding an element equal to `left`, or an object holding such a
+    /// *value* (Rego tests values, not keys). A first-class node rather
+    /// than sugar for `some`: desugaring would need a binding name that
+    /// cannot collide with one the policy already uses.
+    pub const Member = struct {
+        left: *const Expr,
+        right: *const Expr,
     };
 
     pub const Compare = struct {
@@ -378,6 +389,13 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
             .left = try buildExpr(allocator, left_v),
             .right = try buildExpr(allocator, right_v),
         } };
+    } else if (std.mem.eql(u8, t, "in")) {
+        const left_v = try requireField(obj, "left");
+        const right_v = try requireField(obj, "right");
+        expr.* = .{ .member = .{
+            .left = try buildExpr(allocator, left_v),
+            .right = try buildExpr(allocator, right_v),
+        } };
     } else if (std.mem.eql(u8, t, "not")) {
         const inner = try requireField(obj, "expr");
         expr.* = .{ .not = try buildExpr(allocator, inner) };
@@ -513,6 +531,17 @@ test "buildExpr: compare canonical and shorthand are equivalent" {
         "\"right\":{\"type\":\"value\",\"value\":1}}");
     try testing.expectEqual(CompareOp.eq, canonical.compare.op);
     try testing.expectEqual(CompareOp.eq, shorthand.compare.op);
+}
+
+test "buildExpr: in needs both operands" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const e = try buildExprFromJson(&arena, "{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"value\",\"value\":1}," ++
+        "\"right\":{\"type\":\"value\",\"value\":[1]}}");
+    try testing.expect(e.* == .member);
+    try testing.expectError(error.MissingField, buildExprFromJson(&arena, "{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"value\",\"value\":1}}"));
 }
 
 test "buildExpr: rejects unknown type" {

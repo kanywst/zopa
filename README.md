@@ -101,13 +101,12 @@ Every row is reproducible from a clean checkout, but the machine is a developer 
 
 ## Rego coverage
 
-`tools/rego2ast.py` converts `opa parse --format json` output into zopa's AST, and refuses -- loudly -- anything it cannot express. `zig build test-coverage` walks a corpus of one-construct policies and records what converts, so this is a table rather than an adjective. Currently **36 of 52**. What is missing:
+`tools/rego2ast.py` converts `opa parse --format json` output into zopa's AST, and refuses -- loudly -- anything it cannot express. `zig build test-coverage` walks a corpus of one-construct policies and records what converts, so this is a table rather than an adjective. Currently **37 of 52**. What is missing:
 
 | Not supported | Why it matters |
 | --- | --- |
 | standalone `some x in xs` | zopa's `some` binds over its own body, so the declaration cannot be lifted out of it. |
 | `every x in xs { a; b }` multi-expression body | Single-expression bodies convert. |
-| `in` membership operator | Write it as a `some` over the collection. |
 | `sprintf`, `lower`, `split`, and every builtin outside the four | Only `startswith`, `endswith`, `contains`, `count` exist. |
 | array and set comprehensions | No comprehension support at all. |
 | destructuring assignment (`[a, b] := ...`) | Bind the whole value and index into it. |

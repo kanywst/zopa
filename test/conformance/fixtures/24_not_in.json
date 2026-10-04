@@ -1,0 +1,12 @@
+{
+  "name":  "not_in",
+  "note":  "`not x in xs`. Rego spells `in` as a call, so OPA lifts both operands out of the negation: a missing user or a missing deny list fails the body instead of reading as 'not on the list'.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if not input.user in input.banned\n",
+  "cases": [
+    { "input": { "user": "alice", "banned": ["eve"] }, "expected": 1 },
+    { "input": { "user": "eve", "banned": ["eve"] },   "expected": 0 },
+    { "input": { "banned": ["eve"] },                  "expected": 0 },
+    { "input": { "user": "alice" },                    "expected": 0 },
+    { "input": { "user": "alice", "banned": "eve" },   "expected": 1 }
+  ]
+}

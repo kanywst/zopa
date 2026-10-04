@@ -247,6 +247,17 @@ def walk_call_form(terms: list[dict[str, Any]]) -> dict[str, Any]:
             "value": walk_term(args[1]),
         }
 
+    if _describe_ref(op_ref) == "internal.member_2":
+        # `x in xs`. The three-argument form, `k, v in xs`, arrives as
+        # `internal.member_3` and stays unsupported: it binds a key too.
+        if len(args) != 2:
+            raise Unsupported(f"`in` expects 2 args, got {len(args)}")
+        return {
+            "type": "in",
+            "left": walk_term(args[0]),
+            "right": walk_term(args[1]),
+        }
+
     if op_name in BUILTINS:
         return {
             "type": "call",
