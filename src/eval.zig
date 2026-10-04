@@ -359,10 +359,10 @@ fn evalNotLifted(
             const rhs = (try resolveOperandLifted(c.right, input, scope, depth + 1)) orelse return false;
             return !compareValues(c.op, lhs, rhs);
         },
-        // The callers only route calls, memberships and comparisons here;
-        // anything
-        // else is negated plainly rather than trusted to be unreachable,
-        // which would be undefined behaviour in the release build.
+        // The callers only route calls, memberships and comparisons
+        // here; anything else is negated plainly rather than trusted to
+        // be unreachable, which would be undefined behaviour in the
+        // release build.
         else => return !(try evalExprBool(inner, input, scope, depth)),
     }
 }
