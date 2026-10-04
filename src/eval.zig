@@ -356,7 +356,10 @@ fn evalNotLifted(
             const rhs = (try resolveOperandLifted(c.right, input, scope, depth + 1)) orelse return false;
             return !compareValues(c.op, lhs, rhs);
         },
-        else => unreachable,
+        // The callers only route calls and comparisons here; anything
+        // else is negated plainly rather than trusted to be unreachable,
+        // which would be undefined behaviour in the release build.
+        else => return !(try evalExprBool(inner, input, scope, depth)),
     }
 }
 
@@ -368,9 +371,13 @@ fn resolveOperandLifted(
     scope: ?*const Scope,
     depth: u32,
 ) HelperError!?json.Value {
-    const v = try resolveValue(operand, input, scope, depth);
-    if (operand.* == .call and v == .nil) return null;
-    return v;
+    if (operand.* == .call) {
+        // Lifted itself, so its own arguments are lifted too, and a
+        // result it could not compute is as undefined as a missing one.
+        const v = (try evalCallLifted(operand.call, input, scope, depth)) orelse return null;
+        return if (v == .nil) null else v;
+    }
+    return try resolveValue(operand, input, scope, depth);
 }
 
 fn evalCompare(
@@ -538,8 +545,8 @@ fn evalCall(
 }
 
 /// `evalCall` for a call whose arguments OPA lifts out of an enclosing
-/// `not`: `null` when one of them is undefined, rather than the
-/// builtin's answer to it. A ref has to go through `resolveRef`, since
+/// `not`: `null` when one of them is undefined -- at any depth, since a
+/// nested call is lifted too -- rather than the builtin's answer to it. A ref has to go through `resolveRef`, since
 /// `resolveValue` folds a missing path into the same `.nil` as an
 /// explicit JSON null, and OPA lifts a null without failing. A call
 /// yields `.nil` only when it could not compute, which OPA calls
@@ -551,8 +558,10 @@ fn evalCallLifted(
     depth: u32,
 ) HelperError!?json.Value {
     if (depth >= max_eval_depth) return error.EvalTooDeep;
-    if (c.args.len > max_builtin_args) return .nil;
-    const b = builtins.lookup(c.name) orelse return .nil;
+    // A call zopa cannot make at all is undefined here, not a `.nil`
+    // answer: negating it would allow. OPA rejects both at compile time.
+    if (c.args.len > max_builtin_args) return null;
+    const b = builtins.lookup(c.name) orelse return null;
     var resolved: [max_builtin_args]json.Value = undefined;
     for (c.args, 0..) |arg, i| {
         resolved[i] = switch (arg.*) {
@@ -1092,6 +1101,28 @@ test "not: an undefined argument to a call fails the body, as in OPA" {
         "\"right\":{\"type\":\"value\",\"value\":true}}";
     try testing.expect(!(try run("{}", as_value)));
     try testing.expect(try run("{\"path\":\"/x\"}", as_value));
+
+    // A nested call is lifted too, and so are its arguments.
+    const nested =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"value\",\"value\":\"/a\"}," ++
+        "{\"type\":\"call\",\"name\":\"count\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"xs\"]}]}]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":true}}}";
+    try testing.expect(!(try run("{}", nested)));
+
+    // A call zopa cannot make is undefined under `not`, not a negatable
+    // answer: an unknown builtin, and one past the argument cap.
+    const unknown =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"no_such_builtin\",\"args\":[" ++
+        "{\"type\":\"value\",\"value\":1}]}}";
+    try testing.expect(!(try run("{}", unknown)));
+    const nine_args =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"count\",\"args\":[" ++
+        ("{\"type\":\"value\",\"value\":1}," ** 8) ++
+        "{\"type\":\"value\",\"value\":1}]}}";
+    try testing.expect(!(try run("{}", nine_args)));
 
     // A ref compared directly is not lifted, so this negation holds.
     const not_eq =

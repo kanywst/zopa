@@ -14,7 +14,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ### Fixed
 
-- **`not <call>` with an undefined argument allowed.** `allow if not startswith(input.path, "/admin")` let a request with no `path` through, because the builtin's undefined result was negated into `true`. OPA lifts a call's arguments, and a call compared with `==`, out of the negation and evaluates them first, so the missing field fails the body and OPA denies. zopa now does the same. A ref compared directly (`not input.user == "mallory"`) is still not lifted, matching OPA, and a defined argument of the wrong type still leaves the negation holding. Every shape is checked against `opa eval` and pinned by `test/conformance/fixtures/21_not_call_undefined.json` and `22_not_call_index.json`. Release build: +1169 bytes.
+- **`not <call>` with an undefined argument allowed.** `allow if not startswith(input.path, "/admin")` let a request with no `path` through, because the builtin's undefined result was negated into `true`. OPA lifts a call's arguments, and a call compared with `==`, out of the negation and evaluates them first, so the missing field fails the body and OPA denies. zopa now does the same. A ref compared directly (`not input.user == "mallory"`) is still not lifted, matching OPA, and a defined argument of the wrong type still leaves the negation holding. Every shape is checked against `opa eval` and pinned by `test/conformance/fixtures/21_not_call_undefined.json` and `22_not_call_index.json`. A call zopa cannot make at all -- an unknown builtin, or more than 8 arguments -- is undefined under `not` too, rather than negated into an allow. Release build: +1910 bytes.
 
 ## [0.5.0] - 2026-09-14
 
