@@ -58,63 +58,60 @@ pub const ParseError = error{
 /// Maximum nesting depth. Bump if you have a documented need.
 const max_depth: u32 = 64;
 
-/// Member count past which `parseObject` dedupes keys through a hash
-/// index instead of a linear scan.
-const object_index_threshold: usize = 16;
+/// Member count past which `parseObject` stops deduping keys with a
+/// scan per insert and sorts once at the end instead.
+const object_scan_max: usize = 16;
 
-/// Key -> member position for a wide object under construction.
-/// Hand-rolled because `std.StringHashMapUnmanaged` added ~2.3 KB more to
-/// the shipped module than this does, and this table only ever needs find-or-insert.
-const KeyIndex = struct {
-    /// Linear-probed; 0 is empty, otherwise the member position plus one.
-    slots: []usize = &.{},
-    used: usize = 0,
+/// Collapse duplicate keys last-wins, each surviving key keeping the
+/// position it first appeared at (what `JSON.parse` does). Returns the
+/// surviving prefix of `members`.
+///
+/// Sorts rather than hashes. An unseeded hash -- and a freestanding
+/// module has nothing to seed one with -- lets a request body made of
+/// colliding keys turn the parse quadratic. A heap sort is O(n log n)
+/// for every input, so no choice of keys is worse than any other.
+fn dedupeWide(allocator: std.mem.Allocator, members: []Value.Member) error{OutOfMemory}![]Value.Member {
+    const Slot = struct { hash: u32, pos: usize };
+    const order = try allocator.alloc(Slot, members.len);
+    defer allocator.free(order);
+    const dead = try allocator.alloc(bool, members.len);
+    defer allocator.free(dead);
+    for (order, members, 0..) |*o, m, i| o.* = .{ .hash = std.hash.Fnv1a_32.hash(m.key), .pos = i };
+    @memset(dead, false);
 
-    fn deinit(self: *KeyIndex, allocator: std.mem.Allocator) void {
-        allocator.free(self.slots);
-    }
-
-    /// Position of `key` in `members` if it is already there; otherwise
-    /// records it at `members.len` (where the caller appends it) and
-    /// returns null. `members` must hold distinct keys.
-    fn findOrInsert(
-        self: *KeyIndex,
-        allocator: std.mem.Allocator,
-        members: []const Value.Member,
-        key: []const u8,
-    ) error{OutOfMemory}!?usize {
-        if ((self.used + 1) * 2 > self.slots.len) try self.rebuild(allocator, members);
-        const mask = self.slots.len - 1;
-        // FNV-1a is unseeded, so colliding keys can be crafted; that
-        // degrades to the linear scan this replaces, not worse.
-        var i: usize = std.hash.Fnv1a_32.hash(key) & mask;
-        while (true) : (i = (i + 1) & mask) {
-            const slot = &self.slots[i];
-            if (slot.* == 0) {
-                slot.* = members.len + 1;
-                self.used += 1;
-                return null;
-            }
-            if (std.mem.eql(u8, members[slot.* - 1].key, key)) return slot.* - 1;
+    // By hash, then key, then position, so each run of one key ends at
+    // its last occurrence and starts at its first. The hash only makes
+    // the common comparison an integer one; keys crafted to collide fall
+    // through to comparing bytes, still within the sort's bound.
+    std.sort.heap(Slot, order, members, struct {
+        fn lessThan(ms: []Value.Member, a: Slot, b: Slot) bool {
+            if (a.hash != b.hash) return a.hash < b.hash;
+            return switch (std.mem.order(u8, ms[a.pos].key, ms[b.pos].key)) {
+                .lt => true,
+                .gt => false,
+                .eq => a.pos < b.pos,
+            };
         }
+    }.lessThan);
+
+    var run: usize = 0;
+    while (run < order.len) {
+        var end = run + 1;
+        while (end < order.len and order[end].hash == order[run].hash and
+            std.mem.eql(u8, members[order[end].pos].key, members[order[run].pos].key)) end += 1;
+        members[order[run].pos].value = members[order[end - 1].pos].value;
+        for (order[run + 1 .. end]) |o| dead[o.pos] = true;
+        run = end;
     }
 
-    fn rebuild(self: *KeyIndex, allocator: std.mem.Allocator, members: []const Value.Member) !void {
-        allocator.free(self.slots);
-        self.slots = &.{};
-        const len = std.math.ceilPowerOfTwoAssert(usize, @max(64, (members.len + 1) * 4));
-        self.slots = try allocator.alloc(usize, len);
-        @memset(self.slots, 0);
-        self.used = 0;
-        const mask = len - 1;
-        for (members, 0..) |m, pos| {
-            var i: usize = std.hash.Fnv1a_32.hash(m.key) & mask;
-            while (self.slots[i] != 0) : (i = (i + 1) & mask) {}
-            self.slots[i] = pos + 1;
-            self.used += 1;
-        }
+    var w: usize = 0;
+    for (members, dead) |m, d| {
+        if (d) continue;
+        members[w] = m;
+        w += 1;
     }
-};
+    return members[0..w];
+}
 
 /// Parse `source` into a `Value`, allocating on `allocator`.
 pub fn parse(allocator: std.mem.Allocator, source: []const u8) ParseError!Value {
@@ -196,29 +193,26 @@ const Parser = struct {
             return .{ .object = try self.allocator.dupe(Value.Member, entries.items) };
         }
 
-        // A repeated key overwrites the earlier member in place instead
-        // of appending, so the object holds what Go/JS/OPA hold.
+        // A repeated key overwrites the earlier member instead of
+        // appending, so the object holds what Go/JS/OPA hold.
         // `lookupMember` alone is not enough: iteration, `count`, and
         // object equality read the whole member list, and a shadowed
         // value left in it is one the backend never sees -- `some v in
-        // obj` matching it is a bypass. Small objects scan linearly; a
-        // wide one gets an index so a body of thousands of keys stays
-        // linear rather than quadratic.
-        var index: KeyIndex = .{};
-        defer index.deinit(self.allocator);
-
+        // obj` matching it is a bypass. A small object is deduped as it
+        // is read; a wide one once, at the end, so a body of thousands of
+        // keys costs a sort rather than a scan per key.
         while (true) {
             self.skipWs();
             const key = try self.parseString();
             self.skipWs();
             try self.expect(':');
             const v = try self.parseValue();
-            const existing: ?usize = if (entries.items.len < object_index_threshold) blk: {
+            const existing: ?usize = if (entries.items.len < object_scan_max) blk: {
                 for (entries.items, 0..) |e, i| {
                     if (std.mem.eql(u8, e.key, key)) break :blk i;
                 }
                 break :blk null;
-            } else try index.findOrInsert(self.allocator, entries.items, key);
+            } else null;
             if (existing) |i| {
                 entries.items[i].value = v;
             } else {
@@ -232,7 +226,11 @@ const Parser = struct {
             return error.UnexpectedToken;
         }
 
-        return .{ .object = try self.allocator.dupe(Value.Member, entries.items) };
+        const members = if (entries.items.len > object_scan_max)
+            try dedupeWide(self.allocator, entries.items)
+        else
+            entries.items;
+        return .{ .object = try self.allocator.dupe(Value.Member, members) };
     }
 
     fn parseArray(self: *Parser) ParseError!Value {
@@ -764,12 +762,12 @@ test "parse: a duplicated key leaves one member holding the last value" {
     try testing.expect(valueEquals(v, want));
 }
 
-test "parse: duplicate keys collapse past the index threshold too" {
+test "parse: duplicate keys collapse past the scan threshold too" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var src: std.ArrayList(u8) = .empty;
     try src.append(arena.allocator(), '{');
-    const n = object_index_threshold * 3;
+    const n = object_scan_max * 3;
     for (0..n) |i| {
         if (i > 0) try src.append(arena.allocator(), ',');
         // Every key appears twice: k0..k(n/2-1), then again with i.
@@ -780,6 +778,45 @@ test "parse: duplicate keys collapse past the index threshold too" {
     try testing.expectEqual(n / 2, v.object.len);
     for (v.object, 0..) |m, i| {
         try testing.expectEqual(@as(f64, @floatFromInt(i + n / 2)), m.value.number);
+    }
+}
+
+test "parse: a wide object treats an escaped spelling as the same key" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var src: std.ArrayList(u8) = .empty;
+    try src.appendSlice(arena.allocator(), "{\"a\":0");
+    for (0..object_scan_max + 4) |i| try src.print(arena.allocator(), ",\"f{d}\":0", .{i});
+    // Past the scan threshold, so this goes through `dedupeWide`, which
+    // compares keys after `parseString` has decoded them.
+    try src.appendSlice(arena.allocator(), ",\"\\u0061\":1}");
+    const v = try parse(arena.allocator(), src.items);
+    try testing.expectEqual(object_scan_max + 5, v.object.len);
+    try testing.expectEqualStrings("a", v.object[0].key);
+    try testing.expectEqual(@as(f64, 1), v.object[0].value.number);
+}
+
+test "parse: running out of memory while deduping a wide object is an error" {
+    var src: std.ArrayList(u8) = .empty;
+    defer src.deinit(testing.allocator);
+    try src.append(testing.allocator, '{');
+    for (0..object_scan_max * 2) |i| {
+        if (i > 0) try src.append(testing.allocator, ',');
+        try src.print(testing.allocator, "\"k{d}\":0", .{i % object_scan_max});
+    }
+    try src.append(testing.allocator, '}');
+
+    // Fail every allocation from the first one onward until the parse
+    // gets through, so the dedupe's own allocations are among those hit.
+    var fail_index: usize = 0;
+    while (true) : (fail_index += 1) {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        var failing = std.testing.FailingAllocator.init(arena.allocator(), .{ .fail_index = fail_index });
+        if (parse(failing.allocator(), src.items)) |v| {
+            try testing.expectEqual(object_scan_max, v.object.len);
+            break;
+        } else |err| try testing.expectEqual(error.OutOfMemory, err);
     }
 }
 
