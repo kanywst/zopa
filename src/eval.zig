@@ -312,7 +312,7 @@ fn evalExprBool(
             break :blk truthy(v);
         },
         .compare => |c| try evalCompare(c, input, scope, depth + 1),
-        .not => |inner| !(try evalExprBool(inner, input, scope, depth + 1)),
+        .not => |inner| try evalNot(inner, input, scope, depth + 1),
         .some => |it| try evalSome(it, input, scope, depth + 1),
         .every => |it| try evalEvery(it, input, scope, depth + 1),
         .call => |c| truthy(try evalCall(c, input, scope, depth + 1)),
@@ -320,6 +320,61 @@ fn evalExprBool(
         // handles it. Reached here it would have nothing to scope over,
         // so it is an error rather than a silent truth.
         .assign => error.AssignOutsideBody,
+    };
+}
+
+/// `not inner`. Rego negation holds when `inner` is undefined, with one
+/// catch the evaluator has to reproduce: OPA's compiler lifts a call's
+/// arguments, and a call used as a comparison operand, out of the
+/// negation into assignments that run before it. When a lifted term is
+/// undefined the body fails there and the negation is never reached, so
+/// `not startswith(input.path, "/admin")` with no path *denies*. Negating
+/// the call's undefined result instead allowed it -- a missing field
+/// turning into access. A ref compared directly is not lifted:
+/// `not input.missing == "x"` holds, in OPA and here. Each shape checked
+/// against `opa eval` before writing this.
+inline fn evalNot(
+    inner: *const ast.Expr,
+    input: json.Value,
+    scope: ?*const Scope,
+    depth: u32,
+) HelperError!bool {
+    // `depth` already counts this `not`; recursing at `depth + 1` here
+    // would charge each negation twice against `max_eval_depth`.
+    if (depth >= max_eval_depth) return error.EvalTooDeep;
+    switch (inner.*) {
+        .call => |c| for (c.args) |arg| {
+            if (try liftedUndefined(arg, input, scope, depth)) return false;
+        },
+        .compare => |c| for ([_]*const ast.Expr{ c.left, c.right }) |operand| {
+            if (operand.* == .call and try liftedUndefined(operand, input, scope, depth)) return false;
+        },
+        else => {},
+    }
+    return !(try evalExprBool(inner, input, scope, depth));
+}
+
+/// Whether a term `evalNot` lifts out of the negation is undefined. A
+/// ref has to go through `resolveRef`, since `resolveValue` folds a
+/// missing path into the same `.nil` as an explicit JSON null, and OPA
+/// lifts a null without failing. A call yields `.nil` only when it could
+/// not compute, which OPA calls undefined.
+fn liftedUndefined(
+    term: *const ast.Expr,
+    input: json.Value,
+    scope: ?*const Scope,
+    depth: u32,
+) HelperError!bool {
+    return switch (term.*) {
+        .ref => |path| blk: {
+            _ = resolveRef(input, scope, path) catch |err| switch (err) {
+                error.PathNotFound, error.PathNotObject => break :blk true,
+                else => return err,
+            };
+            break :blk false;
+        },
+        .call => (try resolveValue(term, input, scope, depth)) == .nil,
+        else => false,
     };
 }
 
@@ -456,7 +511,7 @@ fn resolveValue(
             else => return err,
         },
         .compare => |c| .{ .boolean = try evalCompare(c, input, scope, depth + 1) },
-        .not => |inner| .{ .boolean = !(try evalExprBool(inner, input, scope, depth + 1)) },
+        .not => |inner| .{ .boolean = try evalNot(inner, input, scope, depth + 1) },
         .some => |it| .{ .boolean = try evalSome(it, input, scope, depth + 1) },
         .every => |it| .{ .boolean = try evalEvery(it, input, scope, depth + 1) },
         .call => |c| try evalCall(c, input, scope, depth + 1),
@@ -959,6 +1014,42 @@ test "evaluate: some over object values" {
         "{\"flags\":{\"a\":false,\"b\":false}}",
         policy,
     )));
+}
+
+test "not: an undefined argument to a call fails the body, as in OPA" {
+    // `not startswith(input.path, "/admin")`. OPA lifts `input.path` out
+    // of the negation, so a request with no path is denied, not let
+    // through as "does not start with /admin".
+    const not_startswith =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"path\"]}," ++
+        "{\"type\":\"value\",\"value\":\"/admin\"}]}}";
+    try testing.expect(!(try run("{}", not_startswith)));
+    try testing.expect(try run("{\"path\":\"/x\"}", not_startswith));
+    try testing.expect(!(try run("{\"path\":\"/admin/x\"}", not_startswith)));
+    // Defined but the wrong type: OPA's builtin is undefined and the
+    // negation holds. Only an undefined *argument* fails the body.
+    try testing.expect(try run("{\"path\":1}", not_startswith));
+    try testing.expect(try run("{\"path\":null}", not_startswith));
+
+    // `not count(input.xs) == 0`: the call is lifted, and it is
+    // undefined both for a missing argument and for one `count` rejects.
+    const not_count_zero =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"call\",\"name\":\"count\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"xs\"]}]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":0}}}";
+    try testing.expect(!(try run("{}", not_count_zero)));
+    try testing.expect(!(try run("{\"xs\":1}", not_count_zero)));
+    try testing.expect(try run("{\"xs\":[1]}", not_count_zero));
+    try testing.expect(!(try run("{\"xs\":[]}", not_count_zero)));
+
+    // A ref compared directly is not lifted, so this negation holds.
+    const not_eq =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"user\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"eve\"}}}";
+    try testing.expect(try run("{}", not_eq));
 }
 
 test "evaluate: every over object defaults to keys" {

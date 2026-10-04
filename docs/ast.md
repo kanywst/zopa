@@ -191,7 +191,14 @@ is identical to
 { "type": "not", "expr": <Expr> }
 ```
 
-Boolean negation of the inner expression.
+Boolean negation of the inner expression. An undefined inner expression is false, so its negation holds -- with one exception, which follows OPA. OPA's compiler lifts a call's arguments, and a call used as a comparison operand, out of the negation and evaluates them first. If one of those is undefined, the body fails before the negation runs:
+
+| Expression                             | Input         | Result | Why                                         |
+| -------------------------------------- | ------------- | ------ | ------------------------------------------- |
+| `not startswith(input.path, "/admin")` | `{}`          | false  | `input.path` is lifted and undefined        |
+| `not startswith(input.path, "/admin")` | `{"path": 1}` | true   | defined; the call is undefined only inside  |
+| `not count(input.tags) == 0`           | `{}`          | false  | `count(...)` is lifted and undefined        |
+| `not input.user == "mallory"`          | `{}`          | true   | a compared ref is not lifted                |
 
 ### `set` -- set literal
 

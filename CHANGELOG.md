@@ -12,6 +12,10 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
   Opt-in via `--engines=...,cedar-native` or `ZOPA_BENCH_CEDAR_NATIVE=1`, because building it pulls ~100 crates. CI does not run it and the regression baseline does not include it. Nothing in the wasm module depends on it; `build.zig.zon` still declares no dependencies.
 
+### Fixed
+
+- **`not <call>` with an undefined argument allowed.** `allow if not startswith(input.path, "/admin")` let a request with no `path` through, because the builtin's undefined result was negated into `true`. OPA lifts a call's arguments, and a call compared with `==`, out of the negation and evaluates them first, so the missing field fails the body and OPA denies. zopa now does the same. A ref compared directly (`not input.user == "mallory"`) is still not lifted, matching OPA, and a defined argument of the wrong type still leaves the negation holding. Every shape is checked against `opa eval` and pinned by `test/conformance/fixtures/21_not_call_undefined.json`. Release build: +794 bytes.
+
 ## [0.5.0] - 2026-09-14
 
 Two features that move what a policy can say, and a run of fail-closed corrections around them.
