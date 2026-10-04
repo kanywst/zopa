@@ -71,13 +71,13 @@ const object_scan_max: usize = 16;
 /// colliding keys turn the parse quadratic. A heap sort is O(n log n)
 /// for every input, so no choice of keys is worse than any other.
 fn dedupeWide(allocator: std.mem.Allocator, members: []Value.Member) error{OutOfMemory}![]Value.Member {
-    const Slot = struct { hash: u32, pos: usize };
+    // One scratch allocation: on the request arena a free only returns
+    // the most recent block, so every extra buffer here would stay
+    // allocated until the reset.
+    const Slot = struct { hash: u32, pos: u32 };
     const order = try allocator.alloc(Slot, members.len);
     defer allocator.free(order);
-    const dead = try allocator.alloc(bool, members.len);
-    defer allocator.free(dead);
-    for (order, members, 0..) |*o, m, i| o.* = .{ .hash = std.hash.Fnv1a_32.hash(m.key), .pos = i };
-    @memset(dead, false);
+    for (order, members, 0..) |*o, m, i| o.* = .{ .hash = std.hash.Fnv1a_32.hash(m.key), .pos = @intCast(i) };
 
     // By hash, then key, then position, so each run of one key ends at
     // its last occurrence and starts at its first. The hash only makes
@@ -100,18 +100,24 @@ fn dedupeWide(allocator: std.mem.Allocator, members: []Value.Member) error{OutOf
         while (end < order.len and order[end].hash == order[run].hash and
             std.mem.eql(u8, members[order[end].pos].key, members[order[run].pos].key)) end += 1;
         members[order[run].pos].value = members[order[end - 1].pos].value;
-        for (order[run + 1 .. end]) |o| dead[o.pos] = true;
+        // Later runs never look at these positions again, so the key
+        // itself can carry the mark.
+        for (order[run + 1 .. end]) |o| members[o.pos].key = shadowed_key;
         run = end;
     }
 
     var w: usize = 0;
-    for (members, dead) |m, d| {
-        if (d) continue;
+    for (members) |m| {
+        if (m.key.ptr == shadowed_key.ptr) continue;
         members[w] = m;
         w += 1;
     }
     return members[0..w];
 }
+
+/// Marks a member `dedupeWide` drops. Compared by address, so no key
+/// read from a document can be mistaken for it.
+const shadowed_key: []const u8 = "\x00shadowed";
 
 /// Parse `source` into a `Value`, allocating on `allocator`.
 pub fn parse(allocator: std.mem.Allocator, source: []const u8) ParseError!Value {
