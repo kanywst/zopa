@@ -1,0 +1,11 @@
+{
+  "name":  "compare_undefined",
+  "note":  "A comparison with an undefined side is undefined, so the body fails. zopa used to compare the missing side as nil, which made `!=` hold and let a request with no `x` through. An explicit null is a value and still compares.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if input.x != 1\n",
+  "cases": [
+    { "input": { "x": 2 },    "expected": 1 },
+    { "input": { "x": 1 },    "expected": 0 },
+    { "input": { },           "expected": 0 },
+    { "input": { "x": null }, "expected": 1 }
+  ]
+}

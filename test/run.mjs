@@ -1239,6 +1239,22 @@ check(
 );
 
 
+// ---------------------------------------------------------------------------
+// Undefined operands. A comparison with a missing side is undefined, and
+// OPA lifts a call's arguments out of an enclosing `not`; both deny on a
+// missing field. Each case checked against `opa eval`.
+// ---------------------------------------------------------------------------
+{
+  const refX = { type: 'ref', path: ['input', 'x'] };
+  check('compare: x != 1 with x missing -> deny', decide({}, { type: 'neq', left: refX, right: { type: 'value', value: 1 } }), 0);
+  check('compare: x == null with x missing -> deny', decide({}, { type: 'eq', left: refX, right: { type: 'value', value: null } }), 0);
+  check('compare: x == null with x null -> allow', decide({ x: null }, { type: 'eq', left: refX, right: { type: 'value', value: null } }), 1);
+  const notStarts = { type: 'not', expr: { type: 'call', name: 'startswith', args: [refX, { type: 'value', value: '/admin' }] } };
+  check('not startswith(missing) -> deny', decide({}, notStarts), 0);
+  check('not startswith(other path) -> allow', decide({ x: '/x' }, notStarts), 1);
+  check('call with the wrong arity -> -1', decide({}, { type: 'call', name: 'count', args: [] }), -1);
+}
+
 if (failed > 0) {
   console.error(`\n${failed} test(s) failed`);
   exit(1);

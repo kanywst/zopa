@@ -1184,6 +1184,18 @@ check("assign: a call that could not compute denies", decide({}, call_policy), 0
 check("assign: an explicit null binds", decide({"user": {"role": None}}, null_policy), 1)
 check("assign: a missing path does not bind", decide({"user": {}}, null_policy), 0)
 
+# Undefined operands. A comparison with a missing side is undefined, and
+# OPA lifts a call's arguments out of an enclosing `not`; both deny on a
+# missing field. Each case checked against `opa eval`.
+ref_x = {"type": "ref", "path": ["input", "x"]}
+check("compare: x != 1 with x missing -> deny", decide({}, {"type": "neq", "left": ref_x, "right": {"type": "value", "value": 1}}), 0)
+check("compare: x == null with x missing -> deny", decide({}, {"type": "eq", "left": ref_x, "right": {"type": "value", "value": None}}), 0)
+check("compare: x == null with x null -> allow", decide({"x": None}, {"type": "eq", "left": ref_x, "right": {"type": "value", "value": None}}), 1)
+not_starts = {"type": "not", "expr": {"type": "call", "name": "startswith", "args": [ref_x, {"type": "value", "value": "/admin"}]}}
+check("not startswith(missing) -> deny", decide({}, not_starts), 0)
+check("not startswith(other path) -> allow", decide({"x": "/x"}, not_starts), 1)
+check("call with the wrong arity -> -1", decide({}, {"type": "call", "name": "count", "args": []}), -1)
+
 if failed:
     print(f"\n{failed} test(s) failed", file=sys.stderr)
     sys.exit(1)
