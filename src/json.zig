@@ -58,6 +58,64 @@ pub const ParseError = error{
 /// Maximum nesting depth. Bump if you have a documented need.
 const max_depth: u32 = 64;
 
+/// Member count past which `parseObject` dedupes keys through a hash
+/// index instead of a linear scan.
+const object_index_threshold: usize = 16;
+
+/// Key -> member position for a wide object under construction.
+/// Hand-rolled because `std.StringHashMapUnmanaged` added ~2.3 KB more to
+/// the shipped module than this does, and this table only ever needs find-or-insert.
+const KeyIndex = struct {
+    /// Linear-probed; 0 is empty, otherwise the member position plus one.
+    slots: []usize = &.{},
+    used: usize = 0,
+
+    fn deinit(self: *KeyIndex, allocator: std.mem.Allocator) void {
+        allocator.free(self.slots);
+    }
+
+    /// Position of `key` in `members` if it is already there; otherwise
+    /// records it at `members.len` (where the caller appends it) and
+    /// returns null. `members` must hold distinct keys.
+    fn findOrInsert(
+        self: *KeyIndex,
+        allocator: std.mem.Allocator,
+        members: []const Value.Member,
+        key: []const u8,
+    ) error{OutOfMemory}!?usize {
+        if ((self.used + 1) * 2 > self.slots.len) try self.rebuild(allocator, members);
+        const mask = self.slots.len - 1;
+        // FNV-1a is unseeded, so colliding keys can be crafted; that
+        // degrades to the linear scan this replaces, not worse.
+        var i: usize = std.hash.Fnv1a_32.hash(key) & mask;
+        while (true) : (i = (i + 1) & mask) {
+            const slot = &self.slots[i];
+            if (slot.* == 0) {
+                slot.* = members.len + 1;
+                self.used += 1;
+                return null;
+            }
+            if (std.mem.eql(u8, members[slot.* - 1].key, key)) return slot.* - 1;
+        }
+    }
+
+    fn rebuild(self: *KeyIndex, allocator: std.mem.Allocator, members: []const Value.Member) !void {
+        allocator.free(self.slots);
+        self.slots = &.{};
+        const len = std.math.ceilPowerOfTwoAssert(usize, @max(64, (members.len + 1) * 4));
+        self.slots = try allocator.alloc(usize, len);
+        @memset(self.slots, 0);
+        self.used = 0;
+        const mask = len - 1;
+        for (members, 0..) |m, pos| {
+            var i: usize = std.hash.Fnv1a_32.hash(m.key) & mask;
+            while (self.slots[i] != 0) : (i = (i + 1) & mask) {}
+            self.slots[i] = pos + 1;
+            self.used += 1;
+        }
+    }
+};
+
 /// Parse `source` into a `Value`, allocating on `allocator`.
 pub fn parse(allocator: std.mem.Allocator, source: []const u8) ParseError!Value {
     var p = Parser{ .src = source, .i = 0, .allocator = allocator, .depth = 0 };
@@ -138,13 +196,34 @@ const Parser = struct {
             return .{ .object = try self.allocator.dupe(Value.Member, entries.items) };
         }
 
+        // A repeated key overwrites the earlier member in place instead
+        // of appending, so the object holds what Go/JS/OPA hold.
+        // `lookupMember` alone is not enough: iteration, `count`, and
+        // object equality read the whole member list, and a shadowed
+        // value left in it is one the backend never sees -- `some v in
+        // obj` matching it is a bypass. Small objects scan linearly; a
+        // wide one gets an index so a body of thousands of keys stays
+        // linear rather than quadratic.
+        var index: KeyIndex = .{};
+        defer index.deinit(self.allocator);
+
         while (true) {
             self.skipWs();
             const key = try self.parseString();
             self.skipWs();
             try self.expect(':');
             const v = try self.parseValue();
-            try entries.append(self.allocator, .{ .key = key, .value = v });
+            const existing: ?usize = if (entries.items.len < object_index_threshold) blk: {
+                for (entries.items, 0..) |e, i| {
+                    if (std.mem.eql(u8, e.key, key)) break :blk i;
+                }
+                break :blk null;
+            } else try index.findOrInsert(self.allocator, entries.items, key);
+            if (existing) |i| {
+                entries.items[i].value = v;
+            } else {
+                try entries.append(self.allocator, .{ .key = key, .value = v });
+            }
 
             self.skipWs();
             const sep = self.advance() orelse return error.UnexpectedEof;
@@ -665,6 +744,43 @@ test "lookupPath: duplicate keys resolve last-wins through nesting" {
     const root = try parse(arena.allocator(), "{\"u\":{\"r\":1},\"u\":{\"r\":2}}");
     const got = try lookupPath(root, &.{ "input", "u", "r" });
     try testing.expectEqual(@as(f64, 2), got.number);
+}
+
+test "parse: a duplicated key leaves one member holding the last value" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try parse(arena.allocator(), "{\"r\":\"admin\",\"x\":1,\"r\":\"guest\"}");
+    try testing.expectEqual(@as(usize, 2), v.object.len);
+    try testing.expectEqualStrings("r", v.object[0].key);
+    try testing.expectEqualStrings("guest", v.object[0].value.string);
+
+    // An escaped spelling is the same key once decoded.
+    const e = try parse(arena.allocator(), "{\"a\":1,\"\\u0061\":2}");
+    try testing.expectEqual(@as(usize, 1), e.object.len);
+    try testing.expectEqual(@as(f64, 2), e.object[0].value.number);
+
+    // What the backend calls equal, zopa does too.
+    const want = try parse(arena.allocator(), "{\"r\":\"guest\",\"x\":1}");
+    try testing.expect(valueEquals(v, want));
+}
+
+test "parse: duplicate keys collapse past the index threshold too" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var src: std.ArrayList(u8) = .empty;
+    try src.append(arena.allocator(), '{');
+    const n = object_index_threshold * 3;
+    for (0..n) |i| {
+        if (i > 0) try src.append(arena.allocator(), ',');
+        // Every key appears twice: k0..k(n/2-1), then again with i.
+        try src.print(arena.allocator(), "\"k{d}\":{d}", .{ i % (n / 2), i });
+    }
+    try src.append(arena.allocator(), '}');
+    const v = try parse(arena.allocator(), src.items);
+    try testing.expectEqual(n / 2, v.object.len);
+    for (v.object, 0..) |m, i| {
+        try testing.expectEqual(@as(f64, @floatFromInt(i + n / 2)), m.value.number);
+    }
 }
 
 test "parse: object and nested array" {

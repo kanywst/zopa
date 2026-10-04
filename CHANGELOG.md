@@ -12,6 +12,10 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
   Opt-in via `--engines=...,cedar-native` or `ZOPA_BENCH_CEDAR_NATIVE=1`, because building it pulls ~100 crates. CI does not run it and the regression baseline does not include it. Nothing in the wasm module depends on it; `build.zig.zon` still declares no dependencies.
 
+### Fixed
+
+- **A value shadowed by a duplicate key could satisfy a policy.** Duplicate object keys have resolved last-wins since 0.3.0, but only for lookups: the parser kept every occurrence in the member list, and everything that reads the whole list saw the ones the backend discards. Against `{"roles": {"r": "admin", "r": "guest"}}`, which Go, JavaScript and OPA all read as `{"r": "guest"}`, `some v in input.roles` (with `kind: "values"`) matched `"admin"` and allowed. `count` on that object returned 2 where the backend counts 1, and the object compared unequal to `{"r": "guest"}`. The parser now overwrites the earlier member in place, so the object zopa holds is the one the backend holds. Objects wider than 16 members dedupe through a small hash index rather than a scan, so a request body made of thousands of keys stays linear. Release build: +1148 bytes.
+
 ## [0.5.0] - 2026-09-14
 
 Two features that move what a policy can say, and a run of fail-closed corrections around them.
