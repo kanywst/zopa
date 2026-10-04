@@ -897,6 +897,37 @@ check(
   check('duplicate input keys resolve last-wins -> deny', r, 0);
 }
 
+{
+  // ...and the shadowed value is gone, not just skipped by lookups:
+  // iterating, counting, or comparing the object must not see it.
+  // A 20-key object is past the parser's scan threshold, so the second
+  // input exercises the sort-based dedupe as well.
+  const someAdmin = {
+    type: 'some', var: 'v', kind: 'values',
+    source: { type: 'ref', path: ['input', 'm'] },
+    body: { type: 'eq', left: { type: 'ref', path: ['v'] }, right: { type: 'value', value: 'admin' } },
+  };
+  const countOne = {
+    type: 'eq',
+    left: { type: 'call', name: 'count', args: [{ type: 'ref', path: ['input', 'm'] }] },
+    right: { type: 'value', value: 1 },
+  };
+  const wide = Array.from({ length: 20 }, (_, n) => `"f${n}":0`).join(',');
+  const cases = [
+    ['some v in obj skips a value shadowed by a duplicate key -> deny', '{"m":{"r":"admin","r":"guest"}}', someAdmin, 0],
+    ['some v in a wide obj skips a shadowed value -> deny', `{"m":{"r":"admin",${wide},"r":"guest"}}`, someAdmin, 0],
+    ['count(obj) counts a duplicated key once -> allow', '{"m":{"a":1,"a":2}}', countOne, 1],
+  ];
+  for (const [name, raw, policy, want] of cases) {
+    const i = writeBytes(enc.encode(raw));
+    const a = writeJson(policy);
+    const r = evaluate(i.ptr, i.len, a.ptr, a.len);
+    freeBuf(i);
+    freeBuf(a);
+    check(name, r, want);
+  }
+}
+
 for (const bad of ['{"n":01}', '{"n":1.}', '{"n":.5}', '{"n":+1}', '{"n":1e}']) {
   const i = writeBytes(enc.encode(bad));
   const a = writeJson({ type: 'value', value: true });

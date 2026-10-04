@@ -1132,6 +1132,37 @@ test "not: an undefined argument to a call fails the body, as in OPA" {
     try testing.expect(try run("{}", not_eq));
 }
 
+test "evaluate: object iteration skips values shadowed by a later duplicate key" {
+    // The backend reads `{"r":"admin","r":"guest"}` as `{"r":"guest"}`.
+    // Iterating the raw member list would let `some v in obj` match the
+    // "admin" the backend never sees.
+    const some_values =
+        "{\"type\":\"some\",\"var\":\"v\",\"kind\":\"values\"," ++
+        "\"source\":{\"type\":\"ref\",\"path\":[\"input\",\"m\"]}," ++
+        "\"body\":{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"v\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"admin\"}}}";
+    try testing.expect(!(try run("{\"m\":{\"r\":\"admin\",\"r\":\"guest\"}}", some_values)));
+    try testing.expect(try run("{\"m\":{\"r\":\"guest\",\"r\":\"admin\"}}", some_values));
+
+    // `every` must not be failed by a value the backend never sees either.
+    const every_values =
+        "{\"type\":\"every\",\"var\":\"v\",\"kind\":\"values\"," ++
+        "\"source\":{\"type\":\"ref\",\"path\":[\"input\",\"m\"]}," ++
+        "\"body\":{\"type\":\"neq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"v\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"root\"}}}";
+    try testing.expect(try run("{\"m\":{\"a\":\"root\",\"b\":\"x\",\"a\":\"y\"}}", every_values));
+
+    // A duplicated key is one key, so `count` agrees with the backend.
+    const count_one =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"call\",\"name\":\"count\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"m\"]}]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":1}}";
+    try testing.expect(try run("{\"m\":{\"a\":1,\"a\":2}}", count_one));
+}
+
 test "evaluate: every over object defaults to keys" {
     const policy =
         "{\"type\":\"every\",\"var\":\"k\"," ++

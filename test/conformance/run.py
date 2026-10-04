@@ -112,7 +112,7 @@ def evaluate_one(
     store: wasmtime.Store,
     exports,
     memory: wasmtime.Memory,
-    input_obj: dict,
+    input_bytes: bytes,
     ast_obj: dict,
 ) -> int:
     """Dispatch into the AST's own package (Rego files always carry
@@ -132,7 +132,7 @@ def evaluate_one(
 
     pkg = ast_obj.get("package", "")
 
-    ip, il = write_bytes(json.dumps(input_obj).encode("utf-8"))
+    ip, il = write_bytes(input_bytes)
     ap, al = write_bytes(json.dumps(ast_obj).encode("utf-8"))
     pp, pl = write_bytes(pkg.encode("utf-8"))
     tp, tl = write_bytes(b"allow")
@@ -143,6 +143,19 @@ def evaluate_one(
         free(store, ap)
         free(store, pp)
         free(store, tp)
+
+
+def case_input_bytes(case: dict) -> bytes:
+    """The request document for one case.
+
+    `input_raw` is a string passed through byte for byte. It exists for
+    documents Python's `json` cannot round-trip -- duplicate keys, which
+    it collapses before zopa would see them -- so the case can pin zopa
+    to the reading `opa eval` gives the same bytes.
+    """
+    if "input_raw" in case:
+        return case["input_raw"].encode("utf-8")
+    return json.dumps(case["input"]).encode("utf-8")
 
 
 def main() -> int:
@@ -176,7 +189,7 @@ def main() -> int:
 
         for i, case in enumerate(fix["cases"]):
             try:
-                got = evaluate_one(store, exports, memory, case["input"], payload)
+                got = evaluate_one(store, exports, memory, case_input_bytes(case), payload)
             except Exception as e:  # pylint: disable=broad-except
                 fail_n += 1
                 line = f"FAIL  {name}#{i}  evaluate raised: {e}"

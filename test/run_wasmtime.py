@@ -761,6 +761,36 @@ check(
     0,
 )
 
+# ...and the shadowed value is gone, not just skipped by lookups. 20
+# extra keys put the object past the parser's scan threshold.
+some_admin = {
+    "type": "some", "var": "v", "kind": "values",
+    "source": {"type": "ref", "path": ["input", "m"]},
+    "body": {"type": "eq", "left": {"type": "ref", "path": ["v"]},
+             "right": {"type": "value", "value": "admin"}},
+}
+count_one = {
+    "type": "eq",
+    "left": {"type": "call", "name": "count", "args": [{"type": "ref", "path": ["input", "m"]}]},
+    "right": {"type": "value", "value": 1},
+}
+wide = ",".join(f'"f{n}":0' for n in range(20))
+check(
+    "some v in obj skips a value shadowed by a duplicate key -> deny",
+    decide_raw(b'{"m":{"r":"admin","r":"guest"}}', some_admin),
+    0,
+)
+check(
+    "some v in a wide obj skips a shadowed value -> deny",
+    decide_raw(('{"m":{"r":"admin",' + wide + ',"r":"guest"}}').encode(), some_admin),
+    0,
+)
+check(
+    "count(obj) counts a duplicated key once -> allow",
+    decide_raw(b'{"m":{"a":1,"a":2}}', count_one),
+    1,
+)
+
 for bad in (b'{"n":01}', b'{"n":1.}', b'{"n":.5}', b'{"n":+1}', b'{"n":1e}'):
     check(
         f"non-JSON number {bad.decode()} is rejected -> -1",
