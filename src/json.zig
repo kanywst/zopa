@@ -58,6 +58,67 @@ pub const ParseError = error{
 /// Maximum nesting depth. Bump if you have a documented need.
 const max_depth: u32 = 64;
 
+/// Member count past which `parseObject` stops deduping keys with a
+/// scan per insert and sorts once at the end instead.
+const object_scan_max: usize = 16;
+
+/// Collapse duplicate keys last-wins, each surviving key keeping the
+/// position it first appeared at (what `JSON.parse` does). Returns the
+/// surviving prefix of `members`.
+///
+/// Sorts rather than hashes. An unseeded hash -- and a freestanding
+/// module has nothing to seed one with -- lets a request body made of
+/// colliding keys turn the parse quadratic. A heap sort is O(n log n)
+/// for every input, so no choice of keys is worse than any other.
+fn dedupeWide(allocator: std.mem.Allocator, members: []Value.Member) error{OutOfMemory}![]Value.Member {
+    // One scratch allocation: on the request arena a free only returns
+    // the most recent block, so every extra buffer here would stay
+    // allocated until the reset.
+    const Slot = struct { hash: u32, pos: u32 };
+    const order = try allocator.alloc(Slot, members.len);
+    defer allocator.free(order);
+    for (order, members, 0..) |*o, m, i| o.* = .{ .hash = std.hash.Fnv1a_32.hash(m.key), .pos = @intCast(i) };
+
+    // By hash, then key, then position, so each run of one key ends at
+    // its last occurrence and starts at its first. The hash only makes
+    // the common comparison an integer one; keys crafted to collide fall
+    // through to comparing bytes, still within the sort's bound.
+    std.sort.heap(Slot, order, members, struct {
+        fn lessThan(ms: []Value.Member, a: Slot, b: Slot) bool {
+            if (a.hash != b.hash) return a.hash < b.hash;
+            return switch (std.mem.order(u8, ms[a.pos].key, ms[b.pos].key)) {
+                .lt => true,
+                .gt => false,
+                .eq => a.pos < b.pos,
+            };
+        }
+    }.lessThan);
+
+    var run: usize = 0;
+    while (run < order.len) {
+        var end = run + 1;
+        while (end < order.len and order[end].hash == order[run].hash and
+            std.mem.eql(u8, members[order[end].pos].key, members[order[run].pos].key)) end += 1;
+        members[order[run].pos].value = members[order[end - 1].pos].value;
+        // Later runs never look at these positions again, so the key
+        // itself can carry the mark.
+        for (order[run + 1 .. end]) |o| members[o.pos].key = shadowed_key;
+        run = end;
+    }
+
+    var w: usize = 0;
+    for (members) |m| {
+        if (m.key.ptr == shadowed_key.ptr) continue;
+        members[w] = m;
+        w += 1;
+    }
+    return members[0..w];
+}
+
+/// Marks a member `dedupeWide` drops. Compared by address, so no key
+/// read from a document can be mistaken for it.
+const shadowed_key: []const u8 = "\x00shadowed";
+
 /// Parse `source` into a `Value`, allocating on `allocator`.
 pub fn parse(allocator: std.mem.Allocator, source: []const u8) ParseError!Value {
     var p = Parser{ .src = source, .i = 0, .allocator = allocator, .depth = 0 };
@@ -138,13 +199,31 @@ const Parser = struct {
             return .{ .object = try self.allocator.dupe(Value.Member, entries.items) };
         }
 
+        // A repeated key overwrites the earlier member instead of
+        // appending, so the object holds what Go/JS/OPA hold.
+        // `lookupMember` alone is not enough: iteration, `count`, and
+        // object equality read the whole member list, and a shadowed
+        // value left in it is one the backend never sees -- `some v in
+        // obj` matching it is a bypass. A small object is deduped as it
+        // is read; a wide one once, at the end, so a body of thousands of
+        // keys costs a sort rather than a scan per key.
         while (true) {
             self.skipWs();
             const key = try self.parseString();
             self.skipWs();
             try self.expect(':');
             const v = try self.parseValue();
-            try entries.append(self.allocator, .{ .key = key, .value = v });
+            const existing: ?usize = if (entries.items.len < object_scan_max) blk: {
+                for (entries.items, 0..) |e, i| {
+                    if (std.mem.eql(u8, e.key, key)) break :blk i;
+                }
+                break :blk null;
+            } else null;
+            if (existing) |i| {
+                entries.items[i].value = v;
+            } else {
+                try entries.append(self.allocator, .{ .key = key, .value = v });
+            }
 
             self.skipWs();
             const sep = self.advance() orelse return error.UnexpectedEof;
@@ -153,7 +232,11 @@ const Parser = struct {
             return error.UnexpectedToken;
         }
 
-        return .{ .object = try self.allocator.dupe(Value.Member, entries.items) };
+        const members = if (entries.items.len > object_scan_max)
+            try dedupeWide(self.allocator, entries.items)
+        else
+            entries.items;
+        return .{ .object = try self.allocator.dupe(Value.Member, members) };
     }
 
     fn parseArray(self: *Parser) ParseError!Value {
@@ -665,6 +748,82 @@ test "lookupPath: duplicate keys resolve last-wins through nesting" {
     const root = try parse(arena.allocator(), "{\"u\":{\"r\":1},\"u\":{\"r\":2}}");
     const got = try lookupPath(root, &.{ "input", "u", "r" });
     try testing.expectEqual(@as(f64, 2), got.number);
+}
+
+test "parse: a duplicated key leaves one member holding the last value" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const v = try parse(arena.allocator(), "{\"r\":\"admin\",\"x\":1,\"r\":\"guest\"}");
+    try testing.expectEqual(@as(usize, 2), v.object.len);
+    try testing.expectEqualStrings("r", v.object[0].key);
+    try testing.expectEqualStrings("guest", v.object[0].value.string);
+
+    // An escaped spelling is the same key once decoded.
+    const e = try parse(arena.allocator(), "{\"a\":1,\"\\u0061\":2}");
+    try testing.expectEqual(@as(usize, 1), e.object.len);
+    try testing.expectEqual(@as(f64, 2), e.object[0].value.number);
+
+    // What the backend calls equal, zopa does too.
+    const want = try parse(arena.allocator(), "{\"r\":\"guest\",\"x\":1}");
+    try testing.expect(valueEquals(v, want));
+}
+
+test "parse: duplicate keys collapse past the scan threshold too" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var src: std.ArrayList(u8) = .empty;
+    try src.append(arena.allocator(), '{');
+    const n = object_scan_max * 3;
+    for (0..n) |i| {
+        if (i > 0) try src.append(arena.allocator(), ',');
+        // Every key appears twice: k0..k(n/2-1), then again with i.
+        try src.print(arena.allocator(), "\"k{d}\":{d}", .{ i % (n / 2), i });
+    }
+    try src.append(arena.allocator(), '}');
+    const v = try parse(arena.allocator(), src.items);
+    try testing.expectEqual(n / 2, v.object.len);
+    for (v.object, 0..) |m, i| {
+        try testing.expectEqual(@as(f64, @floatFromInt(i + n / 2)), m.value.number);
+    }
+}
+
+test "parse: a wide object treats an escaped spelling as the same key" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var src: std.ArrayList(u8) = .empty;
+    try src.appendSlice(arena.allocator(), "{\"a\":0");
+    for (0..object_scan_max + 4) |i| try src.print(arena.allocator(), ",\"f{d}\":0", .{i});
+    // Past the scan threshold, so this goes through `dedupeWide`, which
+    // compares keys after `parseString` has decoded them.
+    try src.appendSlice(arena.allocator(), ",\"\\u0061\":1}");
+    const v = try parse(arena.allocator(), src.items);
+    try testing.expectEqual(object_scan_max + 5, v.object.len);
+    try testing.expectEqualStrings("a", v.object[0].key);
+    try testing.expectEqual(@as(f64, 1), v.object[0].value.number);
+}
+
+test "parse: running out of memory while deduping a wide object is an error" {
+    var src: std.ArrayList(u8) = .empty;
+    defer src.deinit(testing.allocator);
+    try src.append(testing.allocator, '{');
+    for (0..object_scan_max * 2) |i| {
+        if (i > 0) try src.append(testing.allocator, ',');
+        try src.print(testing.allocator, "\"k{d}\":0", .{i % object_scan_max});
+    }
+    try src.append(testing.allocator, '}');
+
+    // Fail every allocation from the first one onward until the parse
+    // gets through, so the dedupe's own allocations are among those hit.
+    var fail_index: usize = 0;
+    while (true) : (fail_index += 1) {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        var failing = std.testing.FailingAllocator.init(arena.allocator(), .{ .fail_index = fail_index });
+        if (parse(failing.allocator(), src.items)) |v| {
+            try testing.expectEqual(object_scan_max, v.object.len);
+            break;
+        } else |err| try testing.expectEqual(error.OutOfMemory, err);
+    }
 }
 
 test "parse: object and nested array" {

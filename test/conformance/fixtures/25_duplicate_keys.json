@@ -1,0 +1,31 @@
+{
+  "name": "duplicate_keys",
+  "note": "A duplicated key holds its last value, and only that: the shadowed value is gone from the object, not just skipped by lookups. Raw inputs, because Python's json would collapse the duplicates before zopa saw them. The last two cases are wide enough (over 16 members) to reach the sort-based dedupe.",
+  "rego": "package authz\n\ndefault allow = false\n\nallow if {\n\tcount(input.m) == 2\n\tinput.m == {\"r\": \"guest\", \"x\": 1}\n}\n\nallow if {\n\tcount(input.w) == 21\n\tinput.w.r == \"guest\"\n}\n",
+  "cases": [
+    {
+      "input_raw": "{\"m\":{\"r\":\"guest\",\"x\":1}}",
+      "expected": 1
+    },
+    {
+      "input_raw": "{\"m\":{\"r\":\"admin\",\"x\":1,\"r\":\"guest\"}}",
+      "expected": 1
+    },
+    {
+      "input_raw": "{\"m\":{\"r\":\"guest\",\"x\":1,\"r\":\"admin\"}}",
+      "expected": 0
+    },
+    {
+      "input_raw": "{\"m\":{\"x\":1,\"\\u0072\":\"admin\",\"r\":\"guest\"}}",
+      "expected": 1
+    },
+    {
+      "input_raw": "{\"w\":{\"r\":\"admin\",\"f0\":0,\"f1\":0,\"f2\":0,\"f3\":0,\"f4\":0,\"f5\":0,\"f6\":0,\"f7\":0,\"f8\":0,\"f9\":0,\"f10\":0,\"f11\":0,\"f12\":0,\"f13\":0,\"f14\":0,\"f15\":0,\"f16\":0,\"f17\":0,\"f18\":0,\"f19\":0,\"r\":\"guest\"}}",
+      "expected": 1
+    },
+    {
+      "input_raw": "{\"w\":{\"r\":\"guest\",\"f0\":0,\"f1\":0,\"f2\":0,\"f3\":0,\"f4\":0,\"f5\":0,\"f6\":0,\"f7\":0,\"f8\":0,\"f9\":0,\"f10\":0,\"f11\":0,\"f12\":0,\"f13\":0,\"f14\":0,\"f15\":0,\"f16\":0,\"f17\":0,\"f18\":0,\"f19\":0,\"r\":\"admin\"}}",
+      "expected": 0
+    }
+  ]
+}

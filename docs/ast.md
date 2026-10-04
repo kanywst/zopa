@@ -267,7 +267,7 @@ The argument cap is 8 (`max_builtin_args` in `src/eval.zig`); calls beyond that 
 zopa reads the same bytes as the service behind the proxy. Anywhere the two parsers could disagree about a document is a place to make a policy read one value while the backend reads another, so the parser is deliberately strict and deliberately conventional:
 
 - **Numbers follow the RFC 8259 grammar exactly.** `01`, `1.`, `.5`, `+1`, `1e`, and `1_000` are all rejected, matching Go, JavaScript, and OPA. A document containing one fails to parse and the decision is `-1`, i.e. deny.
-- **Duplicate object keys resolve last-wins.** `{"role":"admin", "role":"guest"}` means `guest`, which is what Go's `encoding/json` and `JSON.parse` do.
+- **Duplicate object keys resolve last-wins.** `{"role":"admin", "role":"guest"}` means `guest`, which is what Go's `encoding/json` and `JSON.parse` do. The earlier value is dropped when the document is parsed, not just skipped by lookups, so iterating the object, `count`ing it, and comparing it for equality all see one member -- the one the backend sees.
 - **Control bytes below `0x20` must be escaped**, per the spec. The proxy-wasm shim escapes them when it synthesises input from headers, so a header carrying a raw control byte can't produce a document zopa then refuses.
 - **Lone surrogates are rejected**; valid surrogate pairs decode to the non-BMP code point.
 
