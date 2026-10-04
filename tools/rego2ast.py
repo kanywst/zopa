@@ -297,7 +297,12 @@ def _and_chain(exprs: list[dict[str, Any]]) -> dict[str, Any]:
 def walk_term(term: dict[str, Any]) -> dict[str, Any]:
     t = term["type"]
 
-    if t in ("boolean", "number", "string", "null"):
+    # OPA spells a null term `{"type": "null", "value": {}}`: its value
+    # is an empty object, not None. Passing it through turned
+    # `input.x == null` into a comparison against `{}`.
+    if t == "null":
+        return {"type": "value", "value": None}
+    if t in ("boolean", "number", "string"):
         return {"type": "value", "value": term["value"]}
 
     if t == "ref":
@@ -345,7 +350,9 @@ def walk_term_as_jsonvalue(term: dict[str, Any]) -> Any:
     """Walk a term that's known to be a literal JSON value (e.g.
     inside an array / set literal, or an object value)."""
     t = term["type"]
-    if t in ("boolean", "number", "string", "null"):
+    if t == "null":
+        return None
+    if t in ("boolean", "number", "string"):
         return term["value"]
     if t == "array":
         return [walk_term_as_jsonvalue(x) for x in term["value"]]

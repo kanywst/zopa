@@ -154,6 +154,13 @@ class Conversions(unittest.TestCase):
         kinds = [e["type"] for e in ast["rules"][0]["body"]]
         self.assertEqual(kinds, ["assign", "assign", "compare"])
 
+    def test_null_literal_is_null(self):
+        # OPA's JSON gives a null term the value `{}`; it must not leak.
+        ast = self.assertConverts('allow if input.x == null')
+        self.assertEqual(ast["rules"][0]["body"][0]["right"], {"type": "value", "value": None})
+        ast = self.assertConverts('allow if input.x == [null]')
+        self.assertEqual(ast["rules"][0]["body"][0]["right"], {"type": "value", "value": [None]})
+
     def test_every_with_a_single_expression_body(self):
         ast = self.assertConverts("allow if every x in input.xs { x == 1 }")
         self.assertEqual(ast["rules"][0]["body"][0]["type"], "every")
