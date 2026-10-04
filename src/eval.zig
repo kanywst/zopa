@@ -333,8 +333,9 @@ fn evalExprBool(
 /// is undefined the body fails there and the negation is never reached,
 /// so `not startswith(input.path, "/admin")` with no path *denies*.
 /// Negating the call's undefined result instead allowed it -- a missing
-/// field turning into access. A ref compared directly is not lifted:
-/// `not input.missing == "x"` holds, in OPA and here. Each shape checked
+/// field turning into access. `==` is the one comparison that is not a
+/// call, so a ref compared with it is not lifted: `not input.missing ==
+/// "x"` holds, in OPA and here, while `not input.missing != "x"` denies. Each shape checked
 /// against `opa eval` before writing this.
 ///
 /// Every other negation stays inline in the callers, so a chain of
@@ -354,10 +355,15 @@ fn evalNotLifted(
         .compare => |c| {
             const lhs = try resolveDefined(c.left, input, scope, depth + 1);
             const rhs = try resolveDefined(c.right, input, scope, depth + 1);
-            // An undefined call operand was lifted out of the negation,
-            // so the body fails. An undefined ref was not: it only makes
-            // the comparison undefined, and the negation of that holds.
-            if ((lhs == null and c.left.* != .ref) or (rhs == null and c.right.* != .ref)) return false;
+            // Only `==` is not a function call in OPA: `!=`, `<`, `<=`,
+            // `>`, `>=` are builtins, so their ref operands are lifted
+            // out of the negation like any call argument. An undefined
+            // lifted term fails the body; an undefined ref under `==`
+            // only makes the comparison undefined, and the negation of
+            // that holds. Each operator checked against `opa eval`.
+            const refs_lifted = c.op != .eq;
+            if (lhs == null and (refs_lifted or c.left.* != .ref)) return false;
+            if (rhs == null and (refs_lifted or c.right.* != .ref)) return false;
             return !compareValues(c.op, lhs orelse return true, rhs orelse return true);
         },
         // The callers only route calls and comparisons here; anything
@@ -1113,10 +1119,19 @@ test "compare: an undefined side makes the comparison undefined" {
     try testing.expect(!(try run("{}", as_value)));
     try testing.expect(try run("{\"x\":1}", as_value));
 
-    // Under `not`, an undefined ref is not lifted: the comparison is
-    // undefined and its negation holds, as in OPA.
+    // Under `not`, OPA lifts the operands of `!=` (a builtin call), so a
+    // missing side fails the body; `==` is not lifted, so its negation
+    // holds. Both checked against `opa eval`.
     const not_neq = "{\"type\":\"not\",\"expr\":" ++ neq ++ "}";
-    try testing.expect(try run("{}", not_neq));
+    try testing.expect(!(try run("{}", not_neq)));
+    const not_eq = "{\"type\":\"not\",\"expr\":" ++ eq_null ++ "}";
+    try testing.expect(try run("{}", not_eq));
+    const not_gt =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"gt\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"n\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":5}}}";
+    try testing.expect(!(try run("{}", not_gt)));
+    try testing.expect(try run("{\"n\":1}", not_gt));
 }
 
 test "not: an undefined argument to a call fails the body, as in OPA" {

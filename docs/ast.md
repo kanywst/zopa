@@ -191,14 +191,15 @@ is identical to
 { "type": "not", "expr": <Expr> }
 ```
 
-Boolean negation of the inner expression. An undefined inner expression is false, so its negation holds -- with one exception, which follows OPA. OPA's compiler lifts a call's arguments, and a call used as a comparison operand, out of the negation and evaluates them first. If one of those is undefined, the body fails before the negation runs:
+Boolean negation of the inner expression. An undefined inner expression is false, so its negation holds -- with one exception, which follows OPA. OPA's compiler lifts a call's arguments, and a call used as a comparison operand, out of the negation and evaluates them first. Every comparison except `==` is itself a builtin call (`!=`, `<`, `<=`, `>`, `>=`), so its operands are lifted too. If one of those is undefined, the body fails before the negation runs:
 
 | Expression                             | Input         | Result | Why                                         |
 | -------------------------------------- | ------------- | ------ | ------------------------------------------- |
 | `not startswith(input.path, "/admin")` | `{}`          | false  | `input.path` is lifted and undefined        |
 | `not startswith(input.path, "/admin")` | `{"path": 1}` | true   | defined; the call is undefined only inside  |
 | `not count(input.tags) == 0`           | `{}`          | false  | `count(...)` is lifted and undefined        |
-| `not input.user == "mallory"`          | `{}`          | true   | a compared ref is not lifted                |
+| `not input.user == "mallory"`          | `{}`          | true   | `==` is not a call; its ref is not lifted   |
+| `not input.n > 5`                      | `{}`          | false  | `>` is a builtin call; `input.n` is lifted  |
 
 ### `set` -- set literal
 
