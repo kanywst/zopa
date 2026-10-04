@@ -235,6 +235,16 @@ test "analyze: membership in input.body.items -> full_tree" {
         "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"role\"]}," ++
         "\"right\":{\"type\":\"value\",\"value\":[\"a\"]}}";
     try testing.expectEqual(Class.prefix_only, try classify(needle_only));
+
+    // A membership test over a variable bound from the body: the `some`
+    // source already makes it full-tree.
+    const via_binding =
+        "{\"type\":\"some\",\"var\":\"t\"," ++
+        "\"source\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"groups\"]}," ++
+        "\"body\":{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"value\",\"value\":\"x\"}," ++
+        "\"right\":{\"type\":\"ref\",\"path\":[\"t\"]}}}";
+    try testing.expectEqual(Class.full_tree, try classify(via_binding));
 }
 
 test "analyze: prefix_count counts distinct body refs" {

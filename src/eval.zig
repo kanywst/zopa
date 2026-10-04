@@ -558,7 +558,9 @@ fn resolveValue(
         .some => |it| .{ .boolean = try evalSome(it, input, scope, depth + 1) },
         .every => |it| .{ .boolean = try evalEvery(it, input, scope, depth + 1) },
         .call => |c| try evalCall(c, input, scope, depth + 1),
-        .member => |m| .{ .boolean = (try evalMember(m, input, scope, depth + 1)) orelse false },
+        // Undefined stays undefined (`.nil`), as a call's result does, so
+        // `(input.x in xs) == false` cannot hold when `x` is missing.
+        .member => |m| if (try evalMember(m, input, scope, depth + 1)) |held| .{ .boolean = held } else .nil,
         .assign => return error.AssignOutsideBody,
     };
 }
@@ -1244,6 +1246,18 @@ test "in: negated, inside some, and in value position" {
         "\"right\":{\"type\":\"value\",\"value\":[1,2]}}," ++
         "\"right\":{\"type\":\"value\",\"value\":true}}";
     try testing.expect(try run("{}", as_value));
+
+    // An undefined operand leaves the value undefined, not `false`:
+    // `(input.x in input.xs) == false` must not hold with `x` missing.
+    // Checked against `opa eval`.
+    const eq_false =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}," ++
+        "\"right\":{\"type\":\"ref\",\"path\":[\"input\",\"xs\"]}}," ++
+        "\"right\":{\"type\":\"value\",\"value\":false}}";
+    try testing.expect(!(try run("{\"xs\":[1]}", eq_false)));
+    try testing.expect(try run("{\"x\":2,\"xs\":[1]}", eq_false));
 }
 
 test "evaluate: every over object defaults to keys" {
