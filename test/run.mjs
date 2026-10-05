@@ -336,6 +336,13 @@ check('every: null source does not hold -> deny', decide({ tags: null }, everyAd
   check('every values: a key named internal passes -> allow', decide({ attrs: { internal: 'ok' } }, everyValues), 1);
   check('every values: a value named internal fails -> deny', decide({ attrs: { a: 'internal' } }, everyValues), 0);
   check('not every: missing source fails the body -> deny', decide({}, { type: 'not', expr: everyValues }), 0);
+  const someAny = { type: 'some', var: 'v', source: { type: 'ref', path: ['input', 'attrs'] }, body: { type: 'value', value: true } };
+  check('some: missing source -> deny', decide({}, someAny), 0);
+  check('some: null source -> deny', decide({ attrs: null }, someAny), 0);
+  check('some: scalar source -> deny', decide({ attrs: 'x' }, someAny), 0);
+  check('not some: missing source fails the body -> deny', decide({}, { type: 'not', expr: someAny }), 0);
+  check('not some: scalar source fails the body -> deny', decide({ attrs: 'x' }, { type: 'not', expr: someAny }), 0);
+  check('not some: empty source -> allow', decide({ attrs: [] }, { type: 'not', expr: someAny }), 1);
 }
 
 // some over a set literal in the AST
