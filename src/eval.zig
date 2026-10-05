@@ -463,7 +463,7 @@ fn compareValues(op: ast.CompareOp, lhs: json.Value, rhs: json.Value) HelperErro
 /// `left in right`. Rego spells it as a call, `internal.member_2`, so
 /// its operands are a call's arguments: `null` when one is undefined,
 /// which fails the body -- and, lifted out of a `not`, fails it there
-/// too (see `evalNotLifted`). An explicit JSON `null` is a value like
+/// too (see `evalNegation`). An explicit JSON `null` is a value like
 /// any other: `null in [null]` holds.
 fn evalMember(
     m: ast.Expr.Member,
