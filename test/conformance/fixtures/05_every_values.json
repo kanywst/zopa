@@ -1,15 +1,73 @@
 {
-  "name":  "every_values_not_internal",
-  "note":  "`every v in obj` binds the object's values, not its keys. The second and third cases tell the two apart: a key named `internal` passes, a value named `internal` fails. rego2ast used to convert this without `kind`, which zopa reads as keys. A missing or non-collection source denies, as in OPA; only an empty collection is vacuously true.",
-  "rego":  "package authz\n\nallow if every v in input.attrs {\n  v != \"internal\"\n}\n",
+  "name": "every_values_not_internal",
+  "note": "`every v in obj` binds the object's values, not its keys. The second and third cases tell the two apart: a key named `internal` passes, a value named `internal` fails. rego2ast used to convert this without `kind`, which zopa reads as keys. A missing or non-collection source denies, as in OPA; only an empty collection is vacuously true. A duplicated key holds only its last value, as the backend reads it.",
+  "rego": "package authz\n\nallow if every v in input.attrs {\n  v != \"internal\"\n}\n",
   "cases": [
-    { "input": { "attrs": { "team": "sre", "region": "us-east" } }, "expected": 1 },
-    { "input": { "attrs": { "team": "sre", "internal": "yes" } },   "expected": 1 },
-    { "input": { "attrs": { "team": "sre", "scope": "internal" } }, "expected": 0 },
-    { "input": { "attrs": {} },                                      "expected": 1 },
-    { "input": { },                                                  "expected": 0 },
-    { "input": { "attrs": "internal" },                              "expected": 0 },
-    { "input": { "attrs": null },                                    "expected": 0 },
-    { "input": { "attrs": ["sre", "internal"] },                     "expected": 0 }
+    {
+      "input": {
+        "attrs": {
+          "team": "sre",
+          "region": "us-east"
+        }
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "attrs": {
+          "team": "sre",
+          "internal": "yes"
+        }
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "attrs": {
+          "team": "sre",
+          "scope": "internal"
+        }
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "attrs": {}
+      },
+      "expected": 1
+    },
+    {
+      "input": {},
+      "expected": 0
+    },
+    {
+      "input": {
+        "attrs": "internal"
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "attrs": null
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "attrs": [
+          "sre",
+          "internal"
+        ]
+      },
+      "expected": 0
+    },
+    {
+      "input_raw": "{\"attrs\":{\"a\":\"ok\",\"a\":\"internal\"}}",
+      "expected": 0
+    },
+    {
+      "input_raw": "{\"attrs\":{\"a\":\"internal\",\"a\":\"ok\"}}",
+      "expected": 1
+    }
   ]
 }
