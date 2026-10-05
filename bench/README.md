@@ -103,34 +103,34 @@ Seed from a full run, never from `--quick`: 300 iterations is enough for the agr
 
 ## What the numbers said when this landed
 
-Apple M-series laptop, Node 26, OPA 1.20.2, Cedar 4.12.0 (both the WASM binding and the native crate), `--release=small` at v0.5.0. Every column comes from one run of `node bench/run.mjs --engines=zopa,zopa-compiled,opa-wasm,opa-http,cedar,cedar-native`, so the rows are comparable to each other; treat the absolute values as machine-specific and the ratios as the result.
+Apple M-series laptop, Node 26, OPA 1.21.1, Cedar 4.12.0 (both the WASM binding and the native crate), `--release=small` at v0.6.0. Every column comes from one run of `node bench/run.mjs --engines=zopa,zopa-compiled,opa-wasm,opa-http,cedar,cedar-native`, so the rows are comparable to each other; treat the absolute values as machine-specific and the ratios as the result.
 
 Per-decision cost, microseconds (`amort`):
 
 | fixture | zopa (evaluate) | zopa (compiled) | OPA (wasm) | Cedar (native) | Cedar (wasm) | OPA (HTTP sidecar) |
 | --- | --- | --- | --- | --- | --- | --- |
-| `01_static` | 0.35 | **0.09** | 0.86 | 2.83 | 11.9 | 140 |
-| `02_header_eq` | 1.00 | **0.21** | 0.99 | 5.26 | 15.6 | 133 |
-| `03_rbac` | 5.87 | **1.37** | 2.26 | 34.8 | 52.4 | 157 |
-| `04_deep_nest` | 5.98 | **0.37** | — | — | — | — |
+| `01_static` | 0.34 | **0.09** | 0.87 | 2.84 | 11.8 | 131 |
+| `02_header_eq` | 1.02 | **0.21** | 1.01 | 5.45 | 14.8 | 135 |
+| `03_rbac` | 6.11 | **1.43** | 2.33 | 33.7 | 52.5 | 147 |
+| `04_deep_nest` | 6.20 | **0.35** | — | — | — | — |
 
-The Cedar rows are two measurements of the same engine, and the `native` column is charged for the same work as every other column: parsing the request from JSON text. With the request already built, Cedar's evaluator alone answers in **0.63 / 1.00 / 1.63 µs** on the three fixtures — competitive with `zopa-compiled`. Everything between that and the 2.83 / 5.26 / 34.8 above is Cedar converting a JSON request into its own value types, which is not overhead you can opt out of if you are handing it a request off the wire.
+The Cedar rows are two measurements of the same engine, and the `native` column is charged for the same work as every other column: parsing the request from JSON text. With the request already built, Cedar's evaluator alone answers in **0.68 / 1.13 / 2.00 µs** on the three fixtures — competitive with `zopa-compiled`. Everything between that and the 2.84 / 5.45 / 33.7 above is Cedar converting a JSON request into its own value types, which is not overhead you can opt out of if you are handing it a request off the wire.
 
 Footprint and start-up:
 
 | | zopa | OPA (wasm) | OPA (HTTP sidecar) |
 | --- | --- | --- | --- |
-| deployed artifact | **69 KiB**, all policies | 131 KiB **per policy** | — |
+| deployed artifact | **76 KiB**, all policies | 131 KiB **per policy** | — |
 | memory after warm-up | 1.3–1.6 MiB | **128 KiB** | 23 MiB |
-| cold start | **0.4–0.9 ms** | 0.6–2.2 ms | 60–190 ms |
+| cold start | **0.4–1.3 ms** | 0.5–1.5 ms | 57–60 ms |
 
 Six things to take from that, including the ones that do not favour zopa:
 
 1. **Handing the policy over on every call is most of the cost.** The gap between the two zopa rows is exactly what the AST parse and build cost, because nothing else differs between them. If you drive the same policy across requests through `evaluate`, that is what you are paying for the convenience.
-2. **With the policy held, zopa is faster than OPA's wasm build on every fixture** — 1.37 µs against 2.26 on the realistic RBAC policy, where the one-shot path lost. An earlier revision of this file predicted exactly this and could not demonstrate it, because no export took a pre-built policy. `policy_compile` / `evaluate_compiled` is that export.
+2. **With the policy held, zopa is faster than OPA's wasm build on every fixture** — 1.43 µs against 2.33 on the realistic RBAC policy, where the one-shot path lost. An earlier revision of this file predicted exactly this and could not demonstrate it, because no export took a pre-built policy. `policy_compile` / `evaluate_compiled` is that export.
 3. **Both in-process wasm engines beat the sidecar by two orders of magnitude.** This is the claim zopa was built on and it holds with room to spare. It is also the least surprising row: it measures a loopback TCP round trip against a function call.
-4. **The WASM binding was costing Cedar about 3–4x, and the rest is not the evaluator either.** Earlier revisions of this file said the `Cedar (wasm)` row was dominated by the wasm-bindgen boundary and that a native embedding would look different, without measuring it. Now it is measured: native is 2.83 / 5.26 / 34.8 µs against the binding's 11.9 / 15.6 / 52.4, so the boundary was real and it was roughly a 3–4x tax. But native is still 25x `zopa-compiled` on `03_rbac`, and that remainder is *not* evaluation — Cedar's evaluator answers the same fixture in 1.63 µs once it holds the request. It is `Context::from_json_value` plus `Request::new`: converting a JSON document into Cedar's own typed values, schema-less, with the RBAC fixture's arrays becoming sets. That is a design difference, not a slow evaluator. Cedar is built for a request you assemble from typed application state; zopa and OPA are built for one that arrives as JSON on the wire.
-5. **Cedar's evaluator is roughly as fast as zopa's.** 0.63 / 1.00 / 1.63 µs against `zopa-compiled`'s 0.09 / 0.21 / 1.37, on the one comparison where both hold everything they need. The gap on the realistic fixture is 1.2x. Any reading of this table that concludes zopa has a faster *evaluator* than Cedar is reading the request-conversion column.
+4. **The WASM binding was costing Cedar about 3–4x, and the rest is not the evaluator either.** Earlier revisions of this file said the `Cedar (wasm)` row was dominated by the wasm-bindgen boundary and that a native embedding would look different, without measuring it. Now it is measured: native is 2.84 / 5.45 / 33.7 µs against the binding's 11.8 / 14.8 / 52.5, so the boundary was real and it was roughly a 3–4x tax. But native is still 24x `zopa-compiled` on `03_rbac`, and that remainder is *not* evaluation — Cedar's evaluator answers the same fixture in 2.00 µs once it holds the request. It is `Context::from_json_value` plus `Request::new`: converting a JSON document into Cedar's own typed values, schema-less, with the RBAC fixture's arrays becoming sets. That is a design difference, not a slow evaluator. Cedar is built for a request you assemble from typed application state; zopa and OPA are built for one that arrives as JSON on the wire.
+5. **Cedar's evaluator is roughly as fast as zopa's.** 0.68 / 1.13 / 2.00 µs against `zopa-compiled`'s 0.09 / 0.21 / 1.43, on the one comparison where both hold everything they need. The gap on the realistic fixture is 1.4x. Any reading of this table that concludes zopa has a faster *evaluator* than Cedar is reading the request-conversion column.
 6. **zopa holds more WASM memory than OPA's module does** — about 1.4–1.6 MiB against 128 KiB. That is the arena working as designed: it is reset with `.retain_capacity` after every request so `memory.grow` stops firing once warm, trading a steady-state floor for never allocating again. OPA rewinds its heap pointer instead. Against the sidecar's 23 MiB both are rounding errors, but "smaller binary" does not imply "smaller runtime footprint" and the table should not be read as if it did.
 
 ## Not measured
