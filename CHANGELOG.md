@@ -4,6 +4,14 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+### Fixed
+
+- **A number literal past `f64`'s range parsed as infinity.** `{"n": 1e999}` read as `+Inf`, so `input.n > 5` held, while Go's `encoding/json` rejects the document as out of range -- a value the backend never sees deciding the request. Such a literal is now a parse error (`-1`, deny). Underflow (`1e-999`) still reads as `0`, matching Go.
+
+### Changed
+
+- **Documented: numbers are compared as `f64`, not as OPA's exact decimals.** Past 2^53, and for decimals that do not round-trip, zopa and `opa eval` can disagree on `==` and `in`. zopa keeps the reading Go and JavaScript give the backend; `docs/ast.md` now says so and why, and a unit test pins it (#71).
+
 ## [0.6.0] - 2026-10-06
 
 One feature and a release's worth of agreement with OPA. Most of the fixes close the same hole from different sides: **an undefined value was treated as a defined one**, and a missing field turned into an allow.
