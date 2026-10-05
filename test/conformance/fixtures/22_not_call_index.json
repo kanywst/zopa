@@ -1,0 +1,12 @@
+{
+  "name":  "not_call_index",
+  "note":  "The lifted argument is an array element. An index past the end is undefined, so the body fails and denies, the same as a missing field; an element that is present but null is defined, so the builtin is only undefined inside the negation, which holds.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if not startswith(input.paths[1], \"/admin\")\n",
+  "cases": [
+    { "input": { "paths": ["/a", "/x"] },      "expected": 1 },
+    { "input": { "paths": ["/a", "/admin"] },  "expected": 0 },
+    { "input": { "paths": ["/a"] },            "expected": 0 },
+    { "input": { "paths": "/a" },              "expected": 0 },
+    { "input": { "paths": ["/a", null] },      "expected": 1 }
+  ]
+}

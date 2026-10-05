@@ -1,0 +1,11 @@
+{
+  "name":  "compare_call_undefined",
+  "note":  "`count(input.tags) != 0` with no `tags`: the call is undefined, so the comparison is too, and the body fails. A comparison against null with a missing field is likewise not a match.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if {\n\tcount(input.tags) != 0\n\tinput.owner == null\n}\n",
+  "cases": [
+    { "input": { "tags": ["a"], "owner": null }, "expected": 1 },
+    { "input": { "tags": [], "owner": null },    "expected": 0 },
+    { "input": { "owner": null },                "expected": 0 },
+    { "input": { "tags": ["a"] },                "expected": 0 }
+  ]
+}

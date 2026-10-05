@@ -361,6 +361,10 @@ check_rejected envoy-targets-bad-missing-rule.yaml   "target names a missing rul
 # parse, take the defaults, and never read the targets that were
 # written.
 check_rejected envoy-targets-bad-no-wrapper.yaml     "targets without a policy wrapper -> refused"
+# OPA refuses these at compile time; a policy carrying one must stop the
+# filter from starting rather than load and decide something.
+check_rejected envoy-bad-unknown-builtin.yaml        "unknown builtin -> refused"
+check_rejected envoy-bad-builtin-arity.yaml          "builtin with the wrong arity -> refused"
 
 if (( failed > 0 )); then
     echo

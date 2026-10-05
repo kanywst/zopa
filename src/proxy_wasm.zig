@@ -248,7 +248,14 @@ fn compilePolicy(policy_bytes: []const u8) bool {
     const wrapped = wrapped_policy != null;
     const ast_value = wrapped_policy orelse config;
 
-    const bundle = ast.buildModulesBundle(allocator, ast_value) catch return false;
+    const bundle = ast.buildModulesBundle(allocator, ast_value) catch |err| {
+        switch (err) {
+            error.UnknownBuiltin => logMsg(log_level_error, "zopa: policy calls a builtin zopa does not have"),
+            error.BuiltinArity => logMsg(log_level_error, "zopa: policy calls a builtin with the wrong number of arguments"),
+            else => logMsg(log_level_error, "zopa: policy AST is malformed"),
+        }
+        return false;
+    };
 
     const targets = targets_mod.build(allocator, bundle, if (wrapped) config else null) catch |err| {
         switch (err) {

@@ -33,6 +33,8 @@ Each fixture is a JSON object:
 
 `expected` is the int returned by zopa's `evaluate` export: `1` allow, `0` deny, `-1` error.
 
+A case may give `input_raw` -- a string sent to zopa byte for byte -- instead of `input`. Use it for documents that do not survive a round trip through Python's `json`, such as duplicate keys, which it collapses before zopa would see them.
+
 ## Running
 
 ```bash

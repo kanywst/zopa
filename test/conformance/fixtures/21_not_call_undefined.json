@@ -1,0 +1,16 @@
+{
+  "name":  "not_call_undefined",
+  "note":  "OPA lifts a call's arguments, and a call compared with `==`, out of an enclosing `not`. An undefined lifted term fails the body before the negation runs, so a missing field denies instead of reading as 'does not start with /admin'. A ref compared directly is not lifted, and a defined argument of the wrong type leaves the builtin undefined inside the negation, which holds.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if {\n\tnot startswith(input.path, \"/admin\")\n\tnot count(input.tags) == 0\n\tnot input.user == \"mallory\"\n}\n",
+  "cases": [
+    { "input": { "path": "/x", "tags": ["a"] },                    "expected": 1 },
+    { "input": { "path": "/admin/x", "tags": ["a"] },              "expected": 0 },
+    { "input": { "tags": ["a"] },                                  "expected": 0 },
+    { "input": { "path": "/x" },                                   "expected": 0 },
+    { "input": { "path": "/x", "tags": [] },                       "expected": 0 },
+    { "input": { "path": "/x", "tags": 1 },                        "expected": 0 },
+    { "input": { "path": 1, "tags": ["a"] },                       "expected": 1 },
+    { "input": { "path": null, "tags": ["a"] },                    "expected": 1 },
+    { "input": { "path": "/x", "tags": ["a"], "user": "mallory" }, "expected": 0 }
+  ]
+}
