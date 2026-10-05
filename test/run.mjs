@@ -424,16 +424,15 @@ check(
   0,
 );
 
-// unknown builtin: lookup miss resolves to .nil, treated as falsy in
-// body position -> the synthetic `allow` rule fails -> deny (0). The
-// proxy-wasm shim treats any non-1 the same way (deny).
+// unknown builtin: refused when the policy is built, as OPA refuses it
+// at compile time -> -1, which every caller treats as deny.
 check(
-  'call unknown builtin -> deny',
+  'call unknown builtin -> -1',
   decide({}, {
     type: 'call', name: 'made_up_function',
     args: [{ type: 'value', value: 1 }],
   }),
-  0,
+  -1,
 );
 
 // ---------------------------------------------------------------------------
@@ -1239,6 +1238,34 @@ check(
   -1,
 );
 
+
+// ---------------------------------------------------------------------------
+// Undefined operands. A comparison with a missing side is undefined, and
+// OPA lifts a call's arguments out of an enclosing `not`; both deny on a
+// missing field. Each case checked against `opa eval`.
+// ---------------------------------------------------------------------------
+{
+  const refX = { type: 'ref', path: ['input', 'x'] };
+  check('compare: x != 1 with x missing -> deny', decide({}, { type: 'neq', left: refX, right: { type: 'value', value: 1 } }), 0);
+  check('compare: x == null with x missing -> deny', decide({}, { type: 'eq', left: refX, right: { type: 'value', value: null } }), 0);
+  check('compare: x == null with x null -> allow', decide({ x: null }, { type: 'eq', left: refX, right: { type: 'value', value: null } }), 1);
+  const notStarts = { type: 'not', expr: { type: 'call', name: 'startswith', args: [refX, { type: 'value', value: '/admin' }] } };
+  check('not startswith(missing) -> deny', decide({}, notStarts), 0);
+  check('not startswith(other path) -> allow', decide({ x: '/x' }, notStarts), 1);
+  check('call with the wrong arity -> -1', decide({}, { type: 'call', name: 'count', args: [] }), -1);
+  const refN = { type: 'ref', path: ['input', 'n'] };
+  const five = { type: 'value', value: 5 };
+  check('not (n != 5) with n missing -> deny', decide({}, { type: 'not', expr: { type: 'neq', left: refN, right: five } }), 0);
+  check('not (n > 5) with n missing -> deny', decide({}, { type: 'not', expr: { type: 'gt', left: refN, right: five } }), 0);
+  check('not (n == 5) with n missing -> allow', decide({}, { type: 'not', expr: { type: 'eq', left: refN, right: five } }), 1);
+  check('not ("abc" > 5) -> deny (OPA orders string above number)', decide({ n: 'abc' }, { type: 'not', expr: { type: 'gt', left: refN, right: five } }), 0);
+  check('a bad call in an unreferenced rule still refuses the policy -> -1', decide({}, { type: 'module', rules: [
+    { type: 'rule', name: 'allow', body: [{ type: 'value', value: true }] },
+    { type: 'rule', name: 'unused', body: [{ type: 'call', name: 'made_up_fn', args: [] }] },
+  ] }), -1);
+  check('ordering two objects -> -1', decide({ a: { k: 1 }, b: { k: 2 } }, { type: 'lt', left: { type: 'ref', path: ['input', 'a'] }, right: { type: 'ref', path: ['input', 'b'] } }), -1);
+  check('(x != 1) == false with x missing -> deny', decide({}, { type: 'eq', left: { type: 'neq', left: refX, right: { type: 'value', value: 1 } }, right: { type: 'value', value: false } }), 0);
+}
 
 if (failed > 0) {
   console.error(`\n${failed} test(s) failed`);

@@ -370,9 +370,9 @@ check(
     1,
 )
 check(
-    "call unknown builtin -> deny",
+    "call unknown builtin -> -1",
     decide({}, {"type": "call", "name": "made_up_function", "args": [{"type": "value", "value": 1}]}),
-    0,
+    -1,
 )
 
 # ---------------------------------------------------------------------------
@@ -1183,6 +1183,30 @@ check("assign: a call that could not compute denies", decide({}, call_policy), 0
 
 check("assign: an explicit null binds", decide({"user": {"role": None}}, null_policy), 1)
 check("assign: a missing path does not bind", decide({"user": {}}, null_policy), 0)
+
+# Undefined operands. A comparison with a missing side is undefined, and
+# OPA lifts a call's arguments out of an enclosing `not`; both deny on a
+# missing field. Each case checked against `opa eval`.
+ref_x = {"type": "ref", "path": ["input", "x"]}
+check("compare: x != 1 with x missing -> deny", decide({}, {"type": "neq", "left": ref_x, "right": {"type": "value", "value": 1}}), 0)
+check("compare: x == null with x missing -> deny", decide({}, {"type": "eq", "left": ref_x, "right": {"type": "value", "value": None}}), 0)
+check("compare: x == null with x null -> allow", decide({"x": None}, {"type": "eq", "left": ref_x, "right": {"type": "value", "value": None}}), 1)
+not_starts = {"type": "not", "expr": {"type": "call", "name": "startswith", "args": [ref_x, {"type": "value", "value": "/admin"}]}}
+check("not startswith(missing) -> deny", decide({}, not_starts), 0)
+check("not startswith(other path) -> allow", decide({"x": "/x"}, not_starts), 1)
+check("call with the wrong arity -> -1", decide({}, {"type": "call", "name": "count", "args": []}), -1)
+ref_n = {"type": "ref", "path": ["input", "n"]}
+five = {"type": "value", "value": 5}
+check("not (n != 5) with n missing -> deny", decide({}, {"type": "not", "expr": {"type": "neq", "left": ref_n, "right": five}}), 0)
+check("not (n > 5) with n missing -> deny", decide({}, {"type": "not", "expr": {"type": "gt", "left": ref_n, "right": five}}), 0)
+check("not (n == 5) with n missing -> allow", decide({}, {"type": "not", "expr": {"type": "eq", "left": ref_n, "right": five}}), 1)
+check('not ("abc" > 5) -> deny (OPA orders string above number)', decide({"n": "abc"}, {"type": "not", "expr": {"type": "gt", "left": ref_n, "right": five}}), 0)
+check("a bad call in an unreferenced rule still refuses the policy -> -1", decide({}, {"type": "module", "rules": [
+    {"type": "rule", "name": "allow", "body": [{"type": "value", "value": True}]},
+    {"type": "rule", "name": "unused", "body": [{"type": "call", "name": "made_up_fn", "args": []}]},
+]}), -1)
+check("ordering two objects -> -1", decide({"a": {"k": 1}, "b": {"k": 2}}, {"type": "lt", "left": {"type": "ref", "path": ["input", "a"]}, "right": {"type": "ref", "path": ["input", "b"]}}), -1)
+check("(x != 1) == false with x missing -> deny", decide({}, {"type": "eq", "left": {"type": "neq", "left": ref_x, "right": {"type": "value", "value": 1}}, "right": {"type": "value", "value": False}}), 0)
 
 if failed:
     print(f"\n{failed} test(s) failed", file=sys.stderr)

@@ -29,6 +29,7 @@ const max_builtin_args: usize = 8;
 /// cycle that the compiler can't infer through.
 const HelperError = error{
     AssignOutsideBody,
+    UnorderedComparison,
     EvalTooDeep,
     PathNotObject,
     PathNotFound,
@@ -311,8 +312,8 @@ fn evalExprBool(
             };
             break :blk truthy(v);
         },
-        .compare => |c| try evalCompare(c, input, scope, depth + 1),
-        .not => |inner| !(try evalExprBool(inner, input, scope, depth + 1)),
+        .compare => |c| (try evalCompare(c, input, scope, depth + 1)) orelse false,
+        .not => |inner| (try evalNegation(inner, input, scope, depth + 1)) orelse false,
         .some => |it| try evalSome(it, input, scope, depth + 1),
         .every => |it| try evalEvery(it, input, scope, depth + 1),
         .call => |c| truthy(try evalCall(c, input, scope, depth + 1)),
@@ -323,21 +324,119 @@ fn evalExprBool(
     };
 }
 
+/// `not inner`, or `null` when the body fails before the negation is
+/// reached. Rego negation
+/// holds when `inner` is undefined, with one catch: OPA's compiler lifts
+/// a call's arguments, and a call used as a comparison operand, out of
+/// the negation into assignments that run before it. When a lifted term
+/// is undefined the body fails there and the negation is never reached,
+/// so `not startswith(input.path, "/admin")` with no path *denies*.
+/// Negating the call's undefined result instead allowed it -- a missing
+/// field turning into access. `==` is the one comparison that is not a
+/// call, so a ref compared with it is not lifted: `not input.missing ==
+/// "x"` holds, in OPA and here, while `not input.missing != "x"` denies. Each shape checked
+/// against `opa eval` before writing this.
+fn evalNegation(
+    inner: *const ast.Expr,
+    input: json.Value,
+    scope: ?*const Scope,
+    depth: u32,
+) HelperError!?bool {
+    if (depth >= max_eval_depth) return error.EvalTooDeep;
+    switch (inner.*) {
+        .call => |c| {
+            const v = (try evalCallLifted(c, input, scope, depth + 1)) orelse return null;
+            return !truthy(v);
+        },
+        .compare => |c| {
+            const lhs = try resolveDefined(c.left, input, scope, depth + 1);
+            const rhs = try resolveDefined(c.right, input, scope, depth + 1);
+            // Only `==` is not a function call in OPA: `!=`, `<`, `<=`,
+            // `>`, `>=` are builtins, so their ref operands are lifted
+            // out of the negation like any call argument. An undefined
+            // lifted term fails the body; an undefined ref under `==`
+            // only makes the comparison undefined, and the negation of
+            // that holds. Each operator checked against `opa eval`.
+            const refs_lifted = c.op != .eq;
+            if (lhs == null and (refs_lifted or c.left.* != .ref)) return null;
+            if (rhs == null and (refs_lifted or c.right.* != .ref)) return null;
+            return !(try compareValues(c.op, lhs orelse return true, rhs orelse return true));
+        },
+        // `not not x` only exists in hand-built AST (Rego refuses it).
+        // Lifting runs before either negation, so a lifted term that is
+        // undefined fails the body however many `not`s enclose it.
+        .not => |inner2| return !((try evalNegation(inner2, input, scope, depth + 1)) orelse return null),
+        else => return !(try evalExprBool(inner, input, scope, depth)),
+    }
+}
+
+/// A comparison operand under `not`. A call is lifted, so `null` when it
+/// is undefined; anything else resolves as usual.
+fn resolveOperandLifted(
+    operand: *const ast.Expr,
+    input: json.Value,
+    scope: ?*const Scope,
+    depth: u32,
+) HelperError!?json.Value {
+    if (operand.* == .call) {
+        // Lifted itself, so its own arguments are lifted too, and a
+        // result it could not compute is as undefined as a missing one.
+        const v = (try evalCallLifted(operand.call, input, scope, depth)) orelse return null;
+        return if (v == .nil) null else v;
+    }
+    return try resolveValue(operand, input, scope, depth);
+}
+
+/// A comparison, or `null` when either side is undefined. Rego does not
+/// compare an undefined value: `input.x != 1` with no `x` is undefined,
+/// so the body fails. Folding the missing side into `nil` and comparing
+/// it made `!=` hold -- and `== null` too -- turning a missing field
+/// into an allow.
 fn evalCompare(
     c: ast.Expr.Compare,
     input: json.Value,
     scope: ?*const Scope,
     depth: u32,
-) HelperError!bool {
+) HelperError!?bool {
     if (depth >= max_eval_depth) return error.EvalTooDeep;
-    const lhs = try resolveValue(c.left, input, scope, depth + 1);
-    const rhs = try resolveValue(c.right, input, scope, depth + 1);
-    return switch (c.op) {
+    const lhs = (try resolveDefined(c.left, input, scope, depth + 1)) orelse return null;
+    const rhs = (try resolveDefined(c.right, input, scope, depth + 1)) orelse return null;
+    return try compareValues(c.op, lhs, rhs);
+}
+
+/// An operand's value, or `null` when it is undefined: a missing path,
+/// or a call that could not compute. Goes through `resolveRef` for a
+/// ref because `resolveValue` folds a missing path into the same `.nil`
+/// as an explicit JSON null, which is a value like any other.
+fn resolveDefined(
+    operand: *const ast.Expr,
+    input: json.Value,
+    scope: ?*const Scope,
+    depth: u32,
+) HelperError!?json.Value {
+    return switch (operand.*) {
+        .ref => |path| resolveRef(input, scope, path) catch |err| switch (err) {
+            error.PathNotFound, error.PathNotObject => return null,
+            else => return err,
+        },
+        // A nested comparison that is undefined stays undefined, rather
+        // than reaching the outer one as a defined `nil`.
+        .compare => |c| if (try evalCompare(c, input, scope, depth)) |held| .{ .boolean = held } else null,
+        .not => |inner| if (try evalNegation(inner, input, scope, depth)) |held| .{ .boolean = held } else null,
+        else => try resolveOperandLifted(operand, input, scope, depth),
+    };
+}
+
+fn compareValues(op: ast.CompareOp, lhs: json.Value, rhs: json.Value) HelperError!bool {
+    return switch (op) {
         .eq => json.valueEquals(lhs, rhs),
         .neq => !json.valueEquals(lhs, rhs),
         .lt, .lte, .gt, .gte => blk: {
-            const ord = json.valueCompare(lhs, rhs) orelse break :blk false;
-            break :blk switch (c.op) {
+            // Two objects or two sets: OPA orders them, zopa does not.
+            // An error denies; answering `false` would let a negation
+            // of it allow.
+            const ord = json.valueCompare(lhs, rhs) orelse return error.UnorderedComparison;
+            break :blk switch (op) {
                 .lt => ord == .lt,
                 .lte => ord != .gt,
                 .gt => ord == .gt,
@@ -455,8 +554,8 @@ fn resolveValue(
             error.PathNotFound, error.PathNotObject => json.Value.nil,
             else => return err,
         },
-        .compare => |c| .{ .boolean = try evalCompare(c, input, scope, depth + 1) },
-        .not => |inner| .{ .boolean = !(try evalExprBool(inner, input, scope, depth + 1)) },
+        .compare => |c| if (try evalCompare(c, input, scope, depth + 1)) |held| .{ .boolean = held } else .nil,
+        .not => |inner| if (try evalNegation(inner, input, scope, depth + 1)) |held| .{ .boolean = held } else .nil,
         .some => |it| .{ .boolean = try evalSome(it, input, scope, depth + 1) },
         .every => |it| .{ .boolean = try evalEvery(it, input, scope, depth + 1) },
         .call => |c| try evalCall(c, input, scope, depth + 1),
@@ -476,6 +575,32 @@ fn evalCall(
     var resolved: [max_builtin_args]json.Value = undefined;
     for (c.args, 0..) |arg, i| {
         resolved[i] = try resolveValue(arg, input, scope, depth + 1);
+    }
+    return builtins.dispatch(b, resolved[0..c.args.len]);
+}
+
+/// `evalCall` for a call whose arguments OPA lifts out of an enclosing
+/// `not`: `null` when one of them is undefined -- at any depth, since a
+/// nested call is lifted too -- rather than the builtin's answer to it. A ref has to go through `resolveRef`, since
+/// `resolveValue` folds a missing path into the same `.nil` as an
+/// explicit JSON null, and OPA lifts a null without failing. A call
+/// yields `.nil` only when it could not compute, which OPA calls
+/// undefined. Each argument is resolved once.
+fn evalCallLifted(
+    c: ast.Expr.Call,
+    input: json.Value,
+    scope: ?*const Scope,
+    depth: u32,
+) HelperError!?json.Value {
+    if (depth >= max_eval_depth) return error.EvalTooDeep;
+    // Unreachable for a built policy (`ast.buildExpr` refuses an unknown
+    // name or a wrong argument count), but undefined rather than `.nil`
+    // if it ever is: negating `.nil` would allow.
+    if (c.args.len > max_builtin_args) return null;
+    const b = builtins.lookup(c.name) orelse return null;
+    var resolved: [max_builtin_args]json.Value = undefined;
+    for (c.args, 0..) |arg, i| {
+        resolved[i] = (try resolveDefined(arg, input, scope, depth + 1)) orelse return null;
     }
     return builtins.dispatch(b, resolved[0..c.args.len]);
 }
@@ -920,11 +1045,13 @@ test "evaluate: call count compared with gt" {
     try testing.expect(!(try run("{\"perms\":[\"r\"]}", policy)));
 }
 
-test "evaluate: unknown builtin denies" {
+test "evaluate: unknown builtin is refused when the policy is built" {
     const policy =
         "{\"type\":\"call\",\"name\":\"made_up_fn\",\"args\":[" ++
         "{\"type\":\"value\",\"value\":1}]}";
-    try testing.expect(!(try run("{}", policy)));
+    try testing.expectError(error.UnknownBuiltin, run("{}", policy));
+    // Under `not` too: the refusal happens before anything is negated.
+    try testing.expectError(error.UnknownBuiltin, run("{}", "{\"type\":\"not\",\"expr\":" ++ policy ++ "}"));
 }
 
 test "evaluate: every over object keys" {
@@ -959,6 +1086,146 @@ test "evaluate: some over object values" {
         "{\"flags\":{\"a\":false,\"b\":false}}",
         policy,
     )));
+}
+
+test "compare: an undefined side makes the comparison undefined" {
+    const neq =
+        "{\"type\":\"neq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":1}}";
+    // Checked against `opa eval`: a missing `x` denies.
+    try testing.expect(!(try run("{}", neq)));
+    try testing.expect(try run("{\"x\":2}", neq));
+    try testing.expect(try run("{\"x\":null}", neq));
+
+    const eq_null =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":null}}";
+    try testing.expect(!(try run("{}", eq_null)));
+    try testing.expect(try run("{\"x\":null}", eq_null));
+
+    const count_neq =
+        "{\"type\":\"neq\"," ++
+        "\"left\":{\"type\":\"call\",\"name\":\"count\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"tags\"]}]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":0}}";
+    try testing.expect(!(try run("{}", count_neq)));
+    try testing.expect(!(try run("{\"tags\":5}", count_neq)));
+    try testing.expect(try run("{\"tags\":[1]}", count_neq));
+
+    // In value position it stays undefined rather than becoming `false`.
+    const as_value =
+        "{\"type\":\"eq\",\"left\":" ++ neq ++ ",\"right\":{\"type\":\"value\",\"value\":false}}";
+    try testing.expect(!(try run("{}", as_value)));
+    try testing.expect(try run("{\"x\":1}", as_value));
+
+    // Under `not`, OPA lifts the operands of `!=` (a builtin call), so a
+    // missing side fails the body; `==` is not lifted, so its negation
+    // holds. Both checked against `opa eval`.
+    const not_neq = "{\"type\":\"not\",\"expr\":" ++ neq ++ "}";
+    try testing.expect(!(try run("{}", not_neq)));
+    const not_eq = "{\"type\":\"not\",\"expr\":" ++ eq_null ++ "}";
+    try testing.expect(try run("{}", not_eq));
+    const not_gt =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"gt\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"n\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":5}}}";
+    try testing.expect(!(try run("{}", not_gt)));
+    try testing.expect(try run("{\"n\":1}", not_gt));
+}
+
+test "not: an undefined argument to a call fails the body, as in OPA" {
+    // `not startswith(input.path, "/admin")`. OPA lifts `input.path` out
+    // of the negation, so a request with no path is denied, not let
+    // through as "does not start with /admin".
+    const not_startswith =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"path\"]}," ++
+        "{\"type\":\"value\",\"value\":\"/admin\"}]}}";
+    try testing.expect(!(try run("{}", not_startswith)));
+    try testing.expect(try run("{\"path\":\"/x\"}", not_startswith));
+    try testing.expect(!(try run("{\"path\":\"/admin/x\"}", not_startswith)));
+    // Defined but the wrong type: OPA's builtin is undefined and the
+    // negation holds. Only an undefined *argument* fails the body.
+    try testing.expect(try run("{\"path\":1}", not_startswith));
+    try testing.expect(try run("{\"path\":null}", not_startswith));
+
+    // `not count(input.xs) == 0`: the call is lifted, and it is
+    // undefined both for a missing argument and for one `count` rejects.
+    const not_count_zero =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"call\",\"name\":\"count\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"xs\"]}]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":0}}}";
+    try testing.expect(!(try run("{}", not_count_zero)));
+    try testing.expect(!(try run("{\"xs\":1}", not_count_zero)));
+    try testing.expect(try run("{\"xs\":[1]}", not_count_zero));
+    try testing.expect(!(try run("{\"xs\":[]}", not_count_zero)));
+
+    // An array index past the end is as undefined as a missing field.
+    const not_index =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"a\",5]}," ++
+        "{\"type\":\"value\",\"value\":\"x\"}]}}";
+    try testing.expect(!(try run("{\"a\":[]}", not_index)));
+
+    // The same lifting applies where the negation is a value rather than
+    // a body expression -- the other path into `evalNegation`.
+    const as_value =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"path\"]}," ++
+        "{\"type\":\"value\",\"value\":\"/admin\"}]}}," ++
+        "\"right\":{\"type\":\"value\",\"value\":true}}";
+    try testing.expect(!(try run("{}", as_value)));
+    try testing.expect(try run("{\"path\":\"/x\"}", as_value));
+
+    // A nested call is lifted too, and so are its arguments.
+    const nested =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"value\",\"value\":\"/a\"}," ++
+        "{\"type\":\"call\",\"name\":\"count\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"xs\"]}]}]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":true}}}";
+    try testing.expect(!(try run("{}", nested)));
+
+    // A call zopa cannot make never reaches evaluation, negated or not.
+    const nine_args =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"count\",\"args\":[" ++
+        ("{\"type\":\"value\",\"value\":1}," ** 8) ++
+        "{\"type\":\"value\",\"value\":1}]}}";
+    try testing.expectError(error.BuiltinArity, run("{}", nine_args));
+    try testing.expectError(error.BuiltinArity, run("{}", nine_args["{\"type\":\"not\",\"expr\":".len .. nine_args.len - 1]));
+
+    // `not not` is a Rego parse error, so only hand-built AST has it.
+    // Lifting runs before either negation, so the missing path still
+    // fails the body rather than being negated twice into an allow.
+    const not_not =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"path\"]}," ++
+        "{\"type\":\"value\",\"value\":\"/admin\"}]}}}";
+    try testing.expect(!(try run("{}", not_not)));
+    try testing.expect(!(try run("{\"path\":\"/x\"}", not_not)));
+    try testing.expect(try run("{\"path\":\"/admin\"}", not_not));
+
+    // A negation whose body failed is undefined as an operand too, not a
+    // defined nil that `!= true` would accept.
+    const neq_true =
+        "{\"type\":\"neq\",\"left\":{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"path\"]}," ++
+        "{\"type\":\"value\",\"value\":\"/admin\"}]}}," ++
+        "\"right\":{\"type\":\"value\",\"value\":true}}";
+    try testing.expect(!(try run("{}", neq_true)));
+    try testing.expect(try run("{\"path\":\"/admin\"}", neq_true));
+
+    // A ref compared directly is not lifted, so this negation holds.
+    const not_eq =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"user\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":\"eve\"}}}";
+    try testing.expect(try run("{}", not_eq));
 }
 
 test "evaluate: object iteration skips values shadowed by a later duplicate key" {

@@ -171,7 +171,7 @@ Only meaningful as a body statement. A body that ends in one still holds, matchi
 }
 ```
 
-Equality (`eq` / `neq`) works on every value kind. Order operators (`lt` / `lte` / `gt` / `gte`) work on numbers and strings; mixed types compare as `false`.
+A comparison with an undefined side -- a missing path, or a call that could not compute -- is itself undefined, so the body fails: `input.x != 1` does not hold when `x` is absent, and neither does `input.x == null`. An explicit JSON `null` is a value and compares normally. Equality (`eq` / `neq`) works on every value kind. Order operators (`lt` / `lte` / `gt` / `gte`) follow OPA's ordering, across types too: null < boolean < number < string < array < object < set, so `"abc" > 5` holds. Arrays compare element by element, then by length. Ordering two objects or two sets -- which OPA does by their sorted contents -- is an evaluation error, so it denies.
 
 Shorthand: any of the op names as the `type` directly.
 
@@ -191,7 +191,15 @@ is identical to
 { "type": "not", "expr": <Expr> }
 ```
 
-Boolean negation of the inner expression.
+Boolean negation of the inner expression. An undefined inner expression is false, so its negation holds -- with one exception, which follows OPA. OPA's compiler lifts a call's arguments, and a call used as a comparison operand, out of the negation and evaluates them first. Every comparison except `==` is itself a builtin call (`!=`, `<`, `<=`, `>`, `>=`), so its operands are lifted too. If one of those is undefined, the body fails before the negation runs:
+
+| Expression                             | Input         | Result | Why                                         |
+| -------------------------------------- | ------------- | ------ | ------------------------------------------- |
+| `not startswith(input.path, "/admin")` | `{}`          | false  | `input.path` is lifted and undefined        |
+| `not startswith(input.path, "/admin")` | `{"path": 1}` | true   | defined; the call is undefined only inside  |
+| `not count(input.tags) == 0`           | `{}`          | false  | `count(...)` is lifted and undefined        |
+| `not input.user == "mallory"`          | `{}`          | true   | `==` is not a call; its ref is not lifted   |
+| `not input.n > 5`                      | `{}`          | false  | `>` is a builtin call; `input.n` is lifted  |
 
 ### `set` -- set literal
 
@@ -250,7 +258,7 @@ Invokes one of the builtin functions on its resolved arguments and folds the res
 | `contains`   | 2     | (string, string)             | boolean |
 | `count`      | 1     | (array, set, object, string) | number  |
 
-The argument cap is 8 (`max_builtin_args` in `src/eval.zig`); calls beyond that resolve to `nil`. Unknown builtin names also resolve to `nil`.
+An unknown builtin name, or a call with the wrong number of arguments, is rejected when the policy is built (`error.UnknownBuiltin` / `error.BuiltinArity`), as OPA rejects both at compile time: the policy fails to load, or the call returns `-1`. Either way it denies.
 
 ## Decision encoding
 

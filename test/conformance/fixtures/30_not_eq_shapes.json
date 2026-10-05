@@ -1,0 +1,14 @@
+{
+  "name":  "not_eq_shapes",
+  "note":  "`==` is the one comparison OPA does not lift refs out of `not` for, but a call operand of `==` is still lifted. Two missing refs leave the comparison undefined, so its negation holds; a missing argument to the `count` on the right fails the body.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if {\n\tnot input.a == input.b\n\tnot input.c == count(input.d)\n}\n",
+  "cases": [
+    { "input": { "d": [1] },                             "expected": 1 },
+    { "input": { "a": 1, "d": [1] },                     "expected": 1 },
+    { "input": { "a": 1, "b": 2, "d": [1] },             "expected": 1 },
+    { "input": { "a": 1, "b": 2 },                       "expected": 0 },
+    { "input": { "a": 1, "b": 2, "c": 1, "d": [1] },     "expected": 0 },
+    { "input": { "a": 1, "b": 2, "c": 5, "d": [1] },     "expected": 1 },
+    { "input": { "a": 1, "b": 1, "c": 5, "d": [1] },     "expected": 0 }
+  ]
+}

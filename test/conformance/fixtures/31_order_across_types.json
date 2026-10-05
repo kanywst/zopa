@@ -1,0 +1,13 @@
+{
+  "name":  "order_across_types",
+  "note":  "OPA orders values of different types: null < boolean < number < string < array < object < set. A string is greater than any number, so `input.n > 5` holds for `\"abc\"`; arrays compare element by element.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if input.n > 5\n",
+  "cases": [
+    { "input": { "n": 6 },        "expected": 1 },
+    { "input": { "n": 5 },        "expected": 0 },
+    { "input": { "n": "abc" },    "expected": 1 },
+    { "input": { "n": true },     "expected": 0 },
+    { "input": { "n": null },     "expected": 0 },
+    { "input": { "n": [0] },      "expected": 1 }
+  ]
+}
