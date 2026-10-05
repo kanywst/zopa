@@ -943,4 +943,12 @@ test "valueCompare" {
     try testing.expectEqual(std.math.Order.gt, valueCompare(.{ .array = &a1 }, .{ .string = "z" }).?);
     // Two objects are ordered by OPA, but not here.
     try testing.expect(valueCompare(.{ .object = &.{} }, .{ .object = &.{} }) == null);
+    // An object inside an array is reached only if the earlier elements
+    // tie; a difference before it decides the order first.
+    const a_obj = [_]Value{.{ .object = &.{} }};
+    const a_1obj = [_]Value{ .{ .number = 1 }, .{ .object = &.{} } };
+    const a_2obj = [_]Value{ .{ .number = 2 }, .{ .object = &.{} } };
+    try testing.expect(valueCompare(.{ .array = &a_obj }, .{ .array = &a_obj }) == null);
+    try testing.expect(valueCompare(.{ .array = &a_1obj }, .{ .array = &a_1obj }) == null);
+    try testing.expectEqual(std.math.Order.lt, valueCompare(.{ .array = &a_1obj }, .{ .array = &a_2obj }).?);
 }
