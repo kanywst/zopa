@@ -947,7 +947,7 @@ check(
   }
 }
 
-for (const bad of ['{"n":01}', '{"n":1.}', '{"n":.5}', '{"n":+1}', '{"n":1e}']) {
+for (const bad of ['{"n":01}', '{"n":1.}', '{"n":.5}', '{"n":+1}', '{"n":1e}', '{"n":1e999}', '{"n":-1e999}']) {
   const i = writeBytes(enc.encode(bad));
   const a = writeJson({ type: 'value', value: true });
   const r = evaluate(i.ptr, i.len, a.ptr, a.len);

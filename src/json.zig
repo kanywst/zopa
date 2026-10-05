@@ -364,6 +364,11 @@ const Parser = struct {
 
         const text = self.src[start..self.i];
         const f = std.fmt.parseFloat(f64, text) catch return error.InvalidNumber;
+        // A literal past f64's range (`1e999`) parses to infinity.
+        // Go's `encoding/json` rejects it as out of range, so a Go
+        // backend never sees the value zopa would compare; refuse the
+        // document instead. Underflow (`1e-999`) rounds to 0 in both.
+        if (std.math.isInf(f)) return error.InvalidNumber;
         return .{ .number = f };
     }
 
@@ -771,6 +776,21 @@ test "lookupPath: duplicate keys resolve last-wins through nesting" {
     const root = try parse(arena.allocator(), "{\"u\":{\"r\":1},\"u\":{\"r\":2}}");
     const got = try lookupPath(root, &.{ "input", "u", "r" });
     try testing.expectEqual(@as(f64, 2), got.number);
+}
+
+test "parse: numbers are f64, and a literal past its range is refused" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Documented divergence from OPA's exact decimals (docs/ast.md): the
+    // backend reads these as the same f64, and so does zopa.
+    try testing.expect(valueEquals(try parse(a, "9007199254740993"), try parse(a, "9007199254740992")));
+    try testing.expect(valueEquals(try parse(a, "0.1"), try parse(a, "0.10000000000000001")));
+    // Out of range: Go refuses it, so zopa does too.
+    try testing.expectError(error.InvalidNumber, parse(a, "1e999"));
+    try testing.expectError(error.InvalidNumber, parse(a, "-1e999"));
+    // Underflow rounds to zero, in Go as here.
+    try testing.expectEqual(@as(f64, 0), (try parse(a, "1e-999")).number);
 }
 
 test "parse: a duplicated key leaves one member holding the last value" {
