@@ -1,0 +1,11 @@
+{
+  "name":  "in_value_position",
+  "note":  "`in` used as a value. An undefined operand leaves the comparison undefined, so the body fails: `(input.x in input.xs) == false` must not hold when `x` is missing.",
+  "rego":  "package authz\n\ndefault allow = false\n\nallow if (input.x in input.xs) == false\n",
+  "cases": [
+    { "input": { "x": 2, "xs": [1] }, "expected": 1 },
+    { "input": { "x": 1, "xs": [1] }, "expected": 0 },
+    { "input": { "xs": [1] },         "expected": 0 },
+    { "input": { "x": 2 },            "expected": 0 }
+  ]
+}

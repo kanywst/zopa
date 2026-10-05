@@ -317,6 +317,7 @@ fn evalExprBool(
         .some => |it| (try evalSome(it, input, scope, depth + 1)) orelse false,
         .every => |it| (try evalEvery(it, input, scope, depth + 1)) orelse false,
         .call => |c| truthy(try evalCall(c, input, scope, depth + 1)),
+        .member => |m| (try evalMember(m, input, scope, depth + 1)) orelse false,
         // Only meaningful as a body statement, where `evalBodyScoped`
         // handles it. Reached here it would have nothing to scope over,
         // so it is an error rather than a silent truth.
@@ -325,7 +326,8 @@ fn evalExprBool(
 }
 
 /// `not inner`, or `null` when the body fails before the negation is
-/// reached. Rego negation
+/// reached. `in` counts as a call here: Rego spells it
+/// `internal.member_2`. Rego negation
 /// holds when `inner` is undefined, with one catch: OPA's compiler lifts
 /// a call's arguments, and a call used as a comparison operand, out of
 /// the negation into assignments that run before it. When a lifted term
@@ -348,6 +350,7 @@ fn evalNegation(
             const v = (try evalCallLifted(c, input, scope, depth + 1)) orelse return null;
             return !truthy(v);
         },
+        .member => |m| return !((try evalMember(m, input, scope, depth + 1)) orelse return null),
         .compare => |c| {
             const lhs = try resolveDefined(c.left, input, scope, depth + 1);
             const rhs = try resolveDefined(c.right, input, scope, depth + 1);
@@ -382,6 +385,10 @@ fn resolveOperandLifted(
     scope: ?*const Scope,
     depth: u32,
 ) HelperError!?json.Value {
+    if (operand.* == .member) {
+        const held = (try evalMember(operand.member, input, scope, depth)) orelse return null;
+        return .{ .boolean = held };
+    }
     if (operand.* == .call) {
         // Lifted itself, so its own arguments are lifted too, and a
         // result it could not compute is as undefined as a missing one.
@@ -451,6 +458,32 @@ fn compareValues(op: ast.CompareOp, lhs: json.Value, rhs: json.Value) HelperErro
             };
         },
     };
+}
+
+/// `left in right`. Rego spells it as a call, `internal.member_2`, so
+/// its operands are a call's arguments: `null` when one is undefined,
+/// which fails the body -- and, lifted out of a `not`, fails it there
+/// too (see `evalNotLifted`). An explicit JSON `null` is a value like
+/// any other: `null in [null]` holds.
+fn evalMember(
+    m: ast.Expr.Member,
+    input: json.Value,
+    scope: ?*const Scope,
+    depth: u32,
+) HelperError!?bool {
+    if (depth >= max_eval_depth) return error.EvalTooDeep;
+    const needle = (try resolveDefined(m.left, input, scope, depth + 1)) orelse return null;
+    const items: ItemIter = switch ((try resolveDefined(m.right, input, scope, depth + 1)) orelse return null) {
+        .array, .set => |xs| .{ .flat = xs },
+        // Rego tests an object's values, not its keys.
+        .object => |members| .{ .object_values = members },
+        else => return false,
+    };
+    var i: usize = 0;
+    while (i < items.len()) : (i += 1) {
+        if (json.valueEquals(needle, items.at(i))) return true;
+    }
+    return false;
 }
 
 /// Iterator handle returned by `iterItems`. Avoids allocating a
@@ -571,6 +604,9 @@ fn resolveValue(
         .some => |it| if (try evalSome(it, input, scope, depth + 1)) |held| .{ .boolean = held } else .nil,
         .every => |it| if (try evalEvery(it, input, scope, depth + 1)) |held| .{ .boolean = held } else .nil,
         .call => |c| try evalCall(c, input, scope, depth + 1),
+        // Undefined stays undefined (`.nil`), as a call's result does, so
+        // `(input.x in xs) == false` cannot hold when `x` is missing.
+        .member => |m| if (try evalMember(m, input, scope, depth + 1)) |held| .{ .boolean = held } else .nil,
         .assign => return error.AssignOutsideBody,
     };
 }
@@ -1308,6 +1344,86 @@ test "evaluate: object iteration skips values shadowed by a later duplicate key"
         "{\"type\":\"ref\",\"path\":[\"input\",\"m\"]}]}," ++
         "\"right\":{\"type\":\"value\",\"value\":1}}";
     try testing.expect(try run("{\"m\":{\"a\":1,\"a\":2}}", count_one));
+}
+
+test "in: membership in an array, a set, and an object's values" {
+    const policy =
+        "{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"role\"]}," ++
+        "\"right\":{\"type\":\"ref\",\"path\":[\"input\",\"allowed\"]}}";
+    try testing.expect(try run("{\"role\":\"ops\",\"allowed\":[\"dev\",\"ops\"]}", policy));
+    try testing.expect(!(try run("{\"role\":\"qa\",\"allowed\":[\"dev\",\"ops\"]}", policy)));
+    // Rego tests an object's values, not its keys.
+    try testing.expect(try run("{\"role\":\"ops\",\"allowed\":{\"a\":\"ops\"}}", policy));
+    try testing.expect(!(try run("{\"role\":\"a\",\"allowed\":{\"a\":\"ops\"}}", policy)));
+    // Composite needles compare structurally.
+    try testing.expect(try run("{\"role\":[1,2],\"allowed\":[[1,2]]}", policy));
+
+    const set_policy =
+        "{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"role\"]}," ++
+        "\"right\":{\"type\":\"set\",\"items\":[\"dev\",\"ops\"]}}";
+    try testing.expect(try run("{\"role\":\"dev\"}", set_policy));
+    try testing.expect(!(try run("{\"role\":\"qa\"}", set_policy)));
+}
+
+test "in: undefined, scalars, and strings are never members" {
+    const policy =
+        "{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}," ++
+        "\"right\":{\"type\":\"ref\",\"path\":[\"input\",\"xs\"]}}";
+    // An undefined needle is not `null`.
+    try testing.expect(!(try run("{\"xs\":[null]}", policy)));
+    try testing.expect(try run("{\"x\":null,\"xs\":[null]}", policy));
+    try testing.expect(!(try run("{\"x\":1}", policy)));
+    try testing.expect(!(try run("{\"x\":1,\"xs\":1}", policy)));
+    // Not a substring test: `contains` is.
+    try testing.expect(!(try run("{\"x\":\"a\",\"xs\":\"abc\"}", policy)));
+    try testing.expect(!(try run("{\"x\":1,\"xs\":[]}", policy)));
+}
+
+test "in: negated, inside some, and in value position" {
+    const negated =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"user\"]}," ++
+        "\"right\":{\"type\":\"ref\",\"path\":[\"input\",\"banned\"]}}}";
+    try testing.expect(try run("{\"user\":\"a\",\"banned\":[\"b\"]}", negated));
+    try testing.expect(!(try run("{\"user\":\"b\",\"banned\":[\"b\"]}", negated)));
+    // `in` is a call in Rego, so its operands are lifted out of the `not`:
+    // either one missing fails the body rather than letting it hold.
+    try testing.expect(!(try run("{\"banned\":[\"b\"]}", negated)));
+    try testing.expect(!(try run("{\"user\":\"a\"}", negated)));
+    try testing.expect(try run("{\"user\":\"a\",\"banned\":\"abc\"}", negated));
+
+    // The needle can be a bound variable.
+    const bound =
+        "{\"type\":\"some\",\"var\":\"g\"," ++
+        "\"source\":{\"type\":\"ref\",\"path\":[\"input\",\"groups\"]}," ++
+        "\"body\":{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"g\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":[\"admins\"]}}}";
+    try testing.expect(try run("{\"groups\":[\"users\",\"admins\"]}", bound));
+    try testing.expect(!(try run("{\"groups\":[\"users\"]}", bound)));
+
+    const as_value =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"value\",\"value\":2}," ++
+        "\"right\":{\"type\":\"value\",\"value\":[1,2]}}," ++
+        "\"right\":{\"type\":\"value\",\"value\":true}}";
+    try testing.expect(try run("{}", as_value));
+
+    // An undefined operand leaves the value undefined, not `false`:
+    // `(input.x in input.xs) == false` must not hold with `x` missing.
+    // Checked against `opa eval`.
+    const eq_false =
+        "{\"type\":\"eq\"," ++
+        "\"left\":{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"x\"]}," ++
+        "\"right\":{\"type\":\"ref\",\"path\":[\"input\",\"xs\"]}}," ++
+        "\"right\":{\"type\":\"value\",\"value\":false}}";
+    try testing.expect(!(try run("{\"xs\":[1]}", eq_false)));
+    try testing.expect(try run("{\"x\":2,\"xs\":[1]}", eq_false));
 }
 
 test "evaluate: every over object defaults to keys" {

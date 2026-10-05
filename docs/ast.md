@@ -239,6 +239,18 @@ Resolves `source` to an array, set, or object, then evaluates `body` once for ea
 
 Same shape as `some`, but the body must hold for every element. An empty array, set or object yields `true` (vacuous). A source that is undefined or is not a collection makes `every` undefined, as in OPA -- a missing field is not "nothing to check". The body fails, and a negation of it fails too. The same holds for `some`. `kind` works as for `some`.
 
+### `in` -- membership
+
+```json
+{ "type": "in", "left": <Expr>, "right": <Expr> }
+```
+
+Rego's `left in right`. True when `right` is an array or set holding an element equal to `left`, or an object holding such a **value** -- Rego tests values, not keys. Any other `right`, including a string, is never a match: membership is not a substring test (that is `contains`). Equality is the same structural comparison `eq` uses, and an explicit `null` is a value like any other: `null in [null]` holds.
+
+Rego spells `in` as a call, so its operands behave like a call's arguments. An undefined operand fails the body, and under `not` it is lifted out of the negation as described for [`not`](#not----negation): `not input.user in input.banned` denies when either field is missing. In value position the node resolves to a boolean.
+
+`tools/rego2ast.py` converts `x in xs` (OPA's `internal.member_2`). The key-value form `k, v in xs` and a standalone `some x in xs` declaration are not converted.
+
 ### `call` -- builtin function
 
 ```json

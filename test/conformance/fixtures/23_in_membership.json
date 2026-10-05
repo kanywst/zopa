@@ -1,0 +1,98 @@
+{
+  "name": "in_membership",
+  "note": "`x in xs` tests array and set elements and an object's values -- not its keys, and not substrings of a string. Composite needles compare structurally. A duplicated key holds only its last value, the one the backend reads.",
+  "rego": "package authz\n\ndefault allow = false\n\nallow if input.role in input.allowed\n",
+  "cases": [
+    {
+      "input": {
+        "role": "ops",
+        "allowed": [
+          "dev",
+          "ops"
+        ]
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "role": "qa",
+        "allowed": [
+          "dev",
+          "ops"
+        ]
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "role": "ops",
+        "allowed": {
+          "a": "ops"
+        }
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "role": "a",
+        "allowed": {
+          "a": "ops"
+        }
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "role": "a",
+        "allowed": "abc"
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "allowed": [
+          "dev"
+        ]
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "role": [
+          "x"
+        ],
+        "allowed": [
+          [
+            "x"
+          ]
+        ]
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "role": null,
+        "allowed": [
+          null
+        ]
+      },
+      "expected": 1
+    },
+    {
+      "input_raw": "{\"role\":\"admin\",\"allowed\":[\"admin\"],\"allowed\":[\"dev\"]}",
+      "expected": 0
+    },
+    {
+      "input_raw": "{\"role\":\"dev\",\"allowed\":[\"admin\"],\"allowed\":[\"dev\"]}",
+      "expected": 1
+    },
+    {
+      "input_raw": "{\"role\":\"ops\",\"allowed\":{\"a\":\"ops\",\"a\":\"dev\"}}",
+      "expected": 0
+    },
+    {
+      "input_raw": "{\"role\":\"ops\",\"allowed\":{\"a\":\"dev\",\"a\":\"ops\"}}",
+      "expected": 1
+    }
+  ]
+}
