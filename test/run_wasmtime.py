@@ -809,7 +809,7 @@ check(
     1,
 )
 
-for bad in (b'{"n":01}', b'{"n":1.}', b'{"n":.5}', b'{"n":+1}', b'{"n":1e}'):
+for bad in (b'{"n":01}', b'{"n":1.}', b'{"n":.5}', b'{"n":+1}', b'{"n":1e}', b'{"n":1e999}', b'{"n":-1e999}'):
     check(
         f"non-JSON number {bad.decode()} is rejected -> -1",
         decide_raw(bad, {"type": "value", "value": True}),
