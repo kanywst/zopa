@@ -171,7 +171,7 @@ Only meaningful as a body statement. A body that ends in one still holds, matchi
 }
 ```
 
-A comparison with an undefined side -- a missing path, or a call that could not compute -- is itself undefined, so the body fails: `input.x != 1` does not hold when `x` is absent, and neither does `input.x == null`. An explicit JSON `null` is a value and compares normally. Equality (`eq` / `neq`) works on every value kind. Order operators (`lt` / `lte` / `gt` / `gte`) work on numbers and strings; mixed types compare as `false`.
+A comparison with an undefined side -- a missing path, or a call that could not compute -- is itself undefined, so the body fails: `input.x != 1` does not hold when `x` is absent, and neither does `input.x == null`. An explicit JSON `null` is a value and compares normally. Equality (`eq` / `neq`) works on every value kind. Order operators (`lt` / `lte` / `gt` / `gte`) follow OPA's ordering, across types too: null < boolean < number < string < array < object < set, so `"abc" > 5` holds. Arrays compare element by element, then by length. Ordering two objects or two sets -- which OPA does by their sorted contents -- is an evaluation error, so it denies.
 
 Shorthand: any of the op names as the `type` directly.
 

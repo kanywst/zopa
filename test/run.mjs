@@ -1253,6 +1253,13 @@ check(
   check('not startswith(missing) -> deny', decide({}, notStarts), 0);
   check('not startswith(other path) -> allow', decide({ x: '/x' }, notStarts), 1);
   check('call with the wrong arity -> -1', decide({}, { type: 'call', name: 'count', args: [] }), -1);
+  const refN = { type: 'ref', path: ['input', 'n'] };
+  const five = { type: 'value', value: 5 };
+  check('not (n != 5) with n missing -> deny', decide({}, { type: 'not', expr: { type: 'neq', left: refN, right: five } }), 0);
+  check('not (n > 5) with n missing -> deny', decide({}, { type: 'not', expr: { type: 'gt', left: refN, right: five } }), 0);
+  check('not (n == 5) with n missing -> allow', decide({}, { type: 'not', expr: { type: 'eq', left: refN, right: five } }), 1);
+  check('not ("abc" > 5) -> deny (OPA orders string above number)', decide({ n: 'abc' }, { type: 'not', expr: { type: 'gt', left: refN, right: five } }), 0);
+  check('(x != 1) == false with x missing -> deny', decide({}, { type: 'eq', left: { type: 'neq', left: refX, right: { type: 'value', value: 1 } }, right: { type: 'value', value: false } }), 0);
 }
 
 if (failed > 0) {

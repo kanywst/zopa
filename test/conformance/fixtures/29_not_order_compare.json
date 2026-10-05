@@ -1,12 +1,77 @@
 {
-  "name":  "not_order_compare",
-  "note":  "Order comparisons under `not`. `>` is a builtin call in OPA, so its operands are lifted out of the negation: a missing `n` fails the body, unlike `==`. A call operand is lifted too, so a missing `xs` fails it as well.",
-  "rego":  "package authz\n\ndefault allow = false\n\nallow if {\n\tnot input.n > 5\n\tnot count(input.xs) > 5\n}\n",
+  "name": "not_order_compare",
+  "note": "Order comparisons under `not`. `>` is a builtin call in OPA, so its operands are lifted out of the negation: a missing `n` fails the body, unlike `==`. A call operand is lifted too, so a missing `xs` fails it as well. Values of different types are ordered too, as OPA orders them (null < boolean < number < string < array < object < set): `\"abc\" > 5` holds, so its negation does not.",
+  "rego": "package authz\n\ndefault allow = false\n\nallow if {\n\tnot input.n > 5\n\tnot count(input.xs) > 5\n}\n",
   "cases": [
-    { "input": { "n": 1, "xs": [] },  "expected": 1 },
-    { "input": { "xs": [] },          "expected": 0 },
-    { "input": { "n": 9, "xs": [] },  "expected": 0 },
-    { "input": { "n": 1 },            "expected": 0 },
-    { "input": { "n": 1, "xs": [1, 2, 3, 4, 5, 6] }, "expected": 0 }
+    {
+      "input": {
+        "n": 1,
+        "xs": []
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "xs": []
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "n": 9,
+        "xs": []
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "n": 1
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "n": 1,
+        "xs": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "n": "abc",
+        "xs": []
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "n": true,
+        "xs": []
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "n": null,
+        "xs": []
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "n": [
+          1
+        ],
+        "xs": []
+      },
+      "expected": 0
+    }
   ]
 }

@@ -601,19 +601,42 @@ fn setSubsetOf(needle: []const Value, haystack: []const Value) bool {
     return true;
 }
 
-/// Total order on numbers and strings. Returns `null` for any other
-/// pair; the evaluator treats that as a failed comparison.
+/// Rego's ordering, as `<` / `>` see it. OPA orders every pair of
+/// values, across types too: null < boolean < number < string < array <
+/// object < set, so `"abc" > 5` holds. Arrays compare element by element,
+/// then by length. Returns `null` only for two objects or two sets, which
+/// OPA orders by their sorted contents; that needs an allocation this
+/// helper does not make, so the caller reports it rather than guessing.
 pub fn valueCompare(a: Value, b: Value) ?std.math.Order {
+    const ra = typeRank(a);
+    const rb = typeRank(b);
+    if (ra != rb) return std.math.order(ra, rb);
     return switch (a) {
-        .number => |na| switch (b) {
-            .number => |nb| std.math.order(na, nb),
-            else => null,
+        .nil => .eq,
+        .boolean => |ba| std.math.order(@intFromBool(ba), @intFromBool(b.boolean)),
+        .number => |na| std.math.order(na, b.number),
+        .string => |sa| std.mem.order(u8, sa, b.string),
+        .array => |xa| {
+            const xb = b.array;
+            for (xa[0..@min(xa.len, xb.len)], xb[0..@min(xa.len, xb.len)]) |x, y| {
+                const o = valueCompare(x, y) orelse return null;
+                if (o != .eq) return o;
+            }
+            return std.math.order(xa.len, xb.len);
         },
-        .string => |sa| switch (b) {
-            .string => |sb| std.mem.order(u8, sa, sb),
-            else => null,
-        },
-        else => null,
+        .object, .set => null,
+    };
+}
+
+fn typeRank(v: Value) u8 {
+    return switch (v) {
+        .nil => 0,
+        .boolean => 1,
+        .number => 2,
+        .string => 3,
+        .array => 4,
+        .object => 5,
+        .set => 6,
     };
 }
 
@@ -908,5 +931,16 @@ test "valueEquals" {
 test "valueCompare" {
     try testing.expectEqual(std.math.Order.lt, valueCompare(.{ .number = 1 }, .{ .number = 2 }).?);
     try testing.expectEqual(std.math.Order.eq, valueCompare(.{ .string = "a" }, .{ .string = "a" }).?);
-    try testing.expect(valueCompare(.{ .number = 1 }, .{ .string = "1" }) == null);
+    // Across types, OPA's rank order: number < string.
+    try testing.expectEqual(std.math.Order.lt, valueCompare(.{ .number = 1 }, .{ .string = "1" }).?);
+    try testing.expectEqual(std.math.Order.lt, valueCompare(.nil, .{ .boolean = false }).?);
+    try testing.expectEqual(std.math.Order.lt, valueCompare(.{ .boolean = true }, .{ .number = 1 }).?);
+    const a12 = [_]Value{ .{ .number = 1 }, .{ .number = 2 } };
+    const a13 = [_]Value{ .{ .number = 1 }, .{ .number = 3 } };
+    const a1 = [_]Value{.{ .number = 1 }};
+    try testing.expectEqual(std.math.Order.lt, valueCompare(.{ .array = &a12 }, .{ .array = &a13 }).?);
+    try testing.expectEqual(std.math.Order.lt, valueCompare(.{ .array = &a1 }, .{ .array = &a12 }).?);
+    try testing.expectEqual(std.math.Order.gt, valueCompare(.{ .array = &a1 }, .{ .string = "z" }).?);
+    // Two objects are ordered by OPA, but not here.
+    try testing.expect(valueCompare(.{ .object = &.{} }, .{ .object = &.{} }) == null);
 }
