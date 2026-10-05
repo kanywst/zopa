@@ -4,6 +4,25 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-06
+
+One feature and a release's worth of agreement with OPA. Most of the fixes close the same hole from different sides: **an undefined value was treated as a defined one**, and a missing field turned into an allow.
+
+**Rego reach**: `x in xs` converts and evaluates, taking `zig build test-coverage` from 36/52 to 37/52.
+
+**Agreement with OPA**: every fix below was found by running the conformance fixtures against `opa eval` instead of trusting the expected values written next to them, and every one is now pinned by a fixture checked case by case against `opa eval`. One fixture (`05_every_keys.json`) had been asserting the wrong answer.
+
+**Upgrade notes.** Read these before upgrading. Every change errs toward deny, so a request that is allowed today may be denied after the upgrade:
+
+- A comparison with a missing side no longer holds: `input.x != 1` and `input.x == null` deny when `x` is absent.
+- `not <call>(...)` denies when the call's argument is missing. So do `!=`, `<`, `<=`, `>` and `>=`, which OPA treats as calls. `not input.x == ...` still holds.
+- `every` over a missing, `null` or scalar source denies. It was vacuously true.
+- Order comparisons across types follow OPA (`"abc" > 5` holds).
+- A policy calling an unknown builtin, or a builtin with the wrong number of arguments, **fails to load**, even if the call sits in a rule that is never evaluated. The proxy-wasm filter refuses to start and logs why.
+- Policies converted with an older `tools/rego2ast.py` should be re-converted: `every v in obj` was converted into a walk over the keys, and `null` into `{}`.
+
+Release build: **77895 bytes (~76 KB)**, up 7001 from v0.5.0. The per-entry notes below give each change's own contribution, measured on the branch it landed from; this is where the build landed.
+
 ### Added
 
 - **`in` membership.** `{"type": "in", "left": <Expr>, "right": <Expr>}` holds when `right` is an array or set with an element equal to `left`, or an object with such a value. Rego tests values, not keys. `tools/rego2ast.py` converts `x in xs` (OPA's `internal.member_2`) into it, taking `zig build test-coverage` from 36/52 to 37/52. It is a first-class node rather than sugar for `some`, because Rego spells `in` as a call. Its operands therefore follow the same lifting rule under `not`: `not input.user in input.banned` denies when either field is missing, as OPA does, instead of reading a missing user as "not banned". A string on the right is never a match, and `null in [null]` holds. The key-value form `k, v in xs` is still refused. Fixtures `23_in_membership.json`, `24_not_in.json` and `26_in_value_position.json` are checked case by case against `opa eval`; in value position an undefined operand stays undefined, so `(input.x in xs) == false` does not hold when `x` is missing. Release build: +1265 bytes.
@@ -227,7 +246,8 @@ First tagged release. Public surface (export names, AST schema, callback semanti
 
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
-[Unreleased]: https://github.com/kanywst/zopa/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/kanywst/zopa/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/kanywst/zopa/releases/tag/v0.6.0
 [0.5.0]: https://github.com/kanywst/zopa/releases/tag/v0.5.0
 [0.4.1]: https://github.com/kanywst/zopa/releases/tag/v0.4.1
 [0.4.0]: https://github.com/kanywst/zopa/releases/tag/v0.4.0
