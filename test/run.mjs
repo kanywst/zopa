@@ -1259,6 +1259,7 @@ check(
   check('not (n > 5) with n missing -> deny', decide({}, { type: 'not', expr: { type: 'gt', left: refN, right: five } }), 0);
   check('not (n == 5) with n missing -> allow', decide({}, { type: 'not', expr: { type: 'eq', left: refN, right: five } }), 1);
   check('not ("abc" > 5) -> deny (OPA orders string above number)', decide({ n: 'abc' }, { type: 'not', expr: { type: 'gt', left: refN, right: five } }), 0);
+  check('ordering two objects -> -1', decide({ a: { k: 1 }, b: { k: 2 } }, { type: 'lt', left: { type: 'ref', path: ['input', 'a'] }, right: { type: 'ref', path: ['input', 'b'] } }), -1);
   check('(x != 1) == false with x missing -> deny', decide({}, { type: 'eq', left: { type: 'neq', left: refX, right: { type: 'value', value: 1 } }, right: { type: 'value', value: false } }), 0);
 }
 

@@ -422,6 +422,7 @@ fn resolveDefined(
         // A nested comparison that is undefined stays undefined, rather
         // than reaching the outer one as a defined `nil`.
         .compare => |c| if (try evalCompare(c, input, scope, depth)) |held| .{ .boolean = held } else null,
+        .not => |inner| if (try evalNegation(inner, input, scope, depth)) |held| .{ .boolean = held } else null,
         else => try resolveOperandLifted(operand, input, scope, depth),
     };
 }
@@ -1208,6 +1209,16 @@ test "not: an undefined argument to a call fails the body, as in OPA" {
     try testing.expect(!(try run("{}", not_not)));
     try testing.expect(!(try run("{\"path\":\"/x\"}", not_not)));
     try testing.expect(try run("{\"path\":\"/admin\"}", not_not));
+
+    // A negation whose body failed is undefined as an operand too, not a
+    // defined nil that `!= true` would accept.
+    const neq_true =
+        "{\"type\":\"neq\",\"left\":{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"startswith\",\"args\":[" ++
+        "{\"type\":\"ref\",\"path\":[\"input\",\"path\"]}," ++
+        "{\"type\":\"value\",\"value\":\"/admin\"}]}}," ++
+        "\"right\":{\"type\":\"value\",\"value\":true}}";
+    try testing.expect(!(try run("{}", neq_true)));
+    try testing.expect(try run("{\"path\":\"/admin\"}", neq_true));
 
     // A ref compared directly is not lifted, so this negation holds.
     const not_eq =
