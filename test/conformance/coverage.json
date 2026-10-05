@@ -1,5 +1,5 @@
 {
-  "supported": 36,
+  "supported": 37,
   "total": 52,
   "constructs": {
     "rule/constant": true,
@@ -45,7 +45,7 @@
     "builtin/sprintf": false,
     "builtin/lower": false,
     "builtin/split": false,
-    "builtin/in-operator": false,
+    "builtin/in-operator": true,
     "comp/array": false,
     "comp/set": false,
     "func/user-defined": false,

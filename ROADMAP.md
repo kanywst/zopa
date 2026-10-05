@@ -21,6 +21,12 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 
 - **Cedar measured natively.** `bench/native/cedar` links `cedar-policy` in and times itself, so the benchmark no longer has to caveat its Cedar row as a measurement of the WASM binding. The binding was costing Cedar 3-4x; what is left after that is request conversion rather than evaluation, and Cedar's evaluator answers the RBAC fixture in 1.63 us against `zopa-compiled`'s 1.37. Opt-in, since building it pulls ~100 crates. This closes the last item of `docs/proposals/benchmark-harness.md`.
 
+- **`in` membership.** `x in xs` converts and evaluates: array and set elements, object values, structural equality. It is a first-class node rather than sugar for `some`, because Rego spells it as a call and OPA lifts its operands out of an enclosing `not`. `zig build test-coverage` goes from 36/52 to 37/52. This is goal 3 of `docs/proposals/composite-ref-iteration.md`.
+- **Agreement fixes.** Three places where zopa and OPA read the same request or policy differently, each now pinned by a fixture checked against `opa eval`:
+  - a value shadowed by a duplicate JSON key could satisfy a policy;
+  - `not startswith(input.missing, ...)` allowed;
+  - `rego2ast.py` converted `every v in obj` into a walk over the keys.
+
 ## Done in v0.5.0
 
 - **`targets[]` in the proxy-wasm plugin configuration.** A deployment names which `(package, rule)` pairs each phase evaluates and whether a deny enforces, so an audit rule can ride alongside the enforcing one on the same input without becoming a way to fail a request. Enforcing targets are ANDed; advisory ones never block, which is the one place the shim deliberately does not fail closed, and why `deny` is the default. The bare-AST configuration is unchanged. This closes the last open goal of `docs/proposals/multiple-policies.md`.
@@ -57,7 +63,7 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 ## Near term
 
 - **Streaming evaluation runtime.** Build on the body-deps analyser to skip body buffering when no body refs exist, or short-circuit as soon as referenced prefixes resolve. Design in `docs/proposals/streaming-evaluation.md`.
-- **Conformance corpus expansion.** `zig build test-coverage` now answers "which constructs" (36 of 52 as of v0.5.0), so the number exists. What is still missing is breadth: vendor a slice of the OPA upstream test corpus rather than a hand-written probe, and close the constructs the ledger reports as out of reach.
+- **Conformance corpus expansion.** `zig build test-coverage` now answers "which constructs" (37 of 52 on `main`), so the number exists. What is still missing is breadth: vendor a slice of the OPA upstream test corpus rather than a hand-written probe, and close the constructs the ledger reports as out of reach.
 - **Structured response replacement.** Surface a `json.Value` from the evaluator so a denied `allow_response` rule can return `{status, body, headers}` instead of the fixed 503.
 - **Per-context request snapshot.** Surface `:method` / `:path` / selected headers under `proxy_on_request_body` so body rules can reason about request context too.
 

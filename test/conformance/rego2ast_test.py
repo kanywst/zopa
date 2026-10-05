@@ -100,9 +100,10 @@ class Refusals(unittest.TestCase):
         self.assertRefused('allow if every k, v in input.m { k != "x" }', "key binding")
 
     def test_unnamed_operator_is_described(self):
-        # `in` reaches OPA's AST as internal.member_2 and has no bare
-        # name; reporting an empty one tells the reader nothing.
-        self.assertRefused("allow if input.x in input.xs", "internal.member_2")
+        # The key-value form of `in` reaches OPA's AST as
+        # internal.member_3 and has no bare name; reporting an empty one
+        # tells the reader nothing.
+        self.assertRefused('allow if "k", "v" in input.obj', "internal.member_3")
 
 
 class Conversions(unittest.TestCase):
@@ -164,6 +165,20 @@ class Conversions(unittest.TestCase):
         self.assertEqual(ast["rules"][0]["body"][0]["right"], {"type": "value", "value": None})
         ast = self.assertConverts('allow if input.x == [null]')
         self.assertEqual(ast["rules"][0]["body"][0]["right"], {"type": "value", "value": [None]})
+    def test_in_becomes_a_membership_node(self):
+        ast = self.assertConverts("allow if input.x in input.xs")
+        self.assertEqual(ast["rules"][0]["body"][0], {
+            "type": "in",
+            "left": {"type": "ref", "path": ["input", "x"]},
+            "right": {"type": "ref", "path": ["input", "xs"]},
+        })
+
+    def test_negated_in_wraps_the_membership_node(self):
+        ast = self.assertConverts('allow if not input.x in {"a", "b"}')
+        expr = ast["rules"][0]["body"][0]
+        self.assertEqual(expr["type"], "not")
+        self.assertEqual(expr["expr"]["type"], "in")
+        self.assertEqual(expr["expr"]["right"], {"type": "set", "items": ["a", "b"]})
 
     def test_every_with_a_single_expression_body(self):
         ast = self.assertConverts("allow if every x in input.xs { x == 1 }")

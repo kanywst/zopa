@@ -113,6 +113,15 @@ fn visit(st: *State, expr: *const ast.Expr) void {
             }
         },
         .call => |c| for (c.args) |arg| visit(st, arg),
+        // Membership scans the whole collection, so a body ref on the
+        // right is full-tree for the same reason an iteration source is.
+        .member => |m| {
+            visit(st, m.left);
+            visit(st, m.right);
+            if (m.right.* == .ref) {
+                if (classifyRef(m.right.ref) != .none) st.refs_whole = true;
+            }
+        },
         // `x := input.body.amount` reads the body just as surely as
         // comparing against it does. Missing this would classify such a
         // policy as touching nothing, and the shim would then evaluate
@@ -210,6 +219,32 @@ test "analyze: iterate input.body.items -> full_tree" {
         "\"source\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"items\"]}," ++
         "\"body\":{\"type\":\"value\",\"value\":true}}";
     try testing.expectEqual(Class.full_tree, try classify(policy));
+}
+
+test "analyze: membership in input.body.items -> full_tree" {
+    // `x in input.body.tags` scans the whole collection; a truncated
+    // body could drop the element a deny rule was looking for.
+    const policy =
+        "{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"value\",\"value\":\"x\"}," ++
+        "\"right\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"tags\"]}}";
+    try testing.expectEqual(Class.full_tree, try classify(policy));
+
+    const needle_only =
+        "{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"role\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":[\"a\"]}}";
+    try testing.expectEqual(Class.prefix_only, try classify(needle_only));
+
+    // A membership test over a variable bound from the body: the `some`
+    // source already makes it full-tree.
+    const via_binding =
+        "{\"type\":\"some\",\"var\":\"t\"," ++
+        "\"source\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"groups\"]}," ++
+        "\"body\":{\"type\":\"in\"," ++
+        "\"left\":{\"type\":\"value\",\"value\":\"x\"}," ++
+        "\"right\":{\"type\":\"ref\",\"path\":[\"t\"]}}}";
+    try testing.expectEqual(Class.full_tree, try classify(via_binding));
 }
 
 test "analyze: prefix_count counts distinct body refs" {
