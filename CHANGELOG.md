@@ -6,7 +6,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ### Changed
 
-- **Built with Zig 0.17.0** (was 0.16.0). The source needed three changes: `**` array repetition is gone (`@splat` and a comptime loop replace it), and `b.args` is replaced by `Run.addPassthruArgs`, so `zig build bench -- --quick` still forwards its arguments. `minimum_zig_version`, CI, the release workflow and the Dockerfile move together; the build no longer compiles on 0.16. The release build shrinks to 76101 bytes (from 77895) with no source change behind it -- that is the compiler. `zig build test-unit --fuzz` now runs, where on 0.16 the toolchain's own test runner failed to compile in fuzz mode.
+- **Built with Zig 0.17.0** (was 0.16.0). The source needed three changes: `**` array repetition is gone (`@splat` and a comptime loop replace it), and `b.args` is replaced by `Run.addPassthruArgs`, so `zig build bench -- --quick` still forwards its arguments. `minimum_zig_version`, CI, the release workflow and the Dockerfile move together; the build no longer compiles on 0.16. The release build shrinks to 76101 bytes (from 77895) with no source change behind it -- that is the compiler. `zig build test-unit --fuzz` now runs, where on 0.16 the toolchain's own test runner failed to compile in fuzz mode. The Dockerfile now verifies the Zig tarball's minisign signature before using it, with the same key setup-zig checks in CI; it used to pipe the download straight into `tar`.
 
 ## [0.6.0] - 2026-10-06
 
