@@ -272,7 +272,10 @@ def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
     # against the input. A wildcard (`_`, which OPA renames `$0`) binds
     # nothing and is fine.
     key = terms.get("key")
-    if key is not None and not (key.get("type") == "var" and re.fullmatch(r"\$\d+", key["value"])):
+    key_name = key.get("value") if isinstance(key, dict) else None
+    if key is not None and not (
+        key.get("type") == "var" and isinstance(key_name, str) and re.fullmatch(r"\$\d+", key_name)
+    ):
         raise Unsupported("`every` with a key binding not supported: zopa binds one variable")
 
     out: dict[str, Any] = {

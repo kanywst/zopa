@@ -288,6 +288,15 @@ check("every: one mismatch -> deny", decide({"tags": ["admin", "guest"]}, every_
 check("every: vacuously true on empty -> allow", decide({"tags": []}, every_admin), 1)
 check("every: missing source does not hold -> deny", decide({}, every_admin), 0)
 check("every: scalar source does not hold -> deny", decide({"tags": "admin"}, every_admin), 0)
+check("every: null source does not hold -> deny", decide({"tags": None}, every_admin), 0)
+every_values = {
+    "type": "every", "var": "v", "kind": "values",
+    "source": {"type": "ref", "path": ["input", "attrs"]},
+    "body": {"type": "neq", "left": {"type": "ref", "path": ["v"]}, "right": {"type": "value", "value": "internal"}},
+}
+check("every values: a key named internal passes -> allow", decide({"attrs": {"internal": "ok"}}, every_values), 1)
+check("every values: a value named internal fails -> deny", decide({"attrs": {"a": "internal"}}, every_values), 0)
+check("not every: missing source fails the body -> deny", decide({}, {"type": "not", "expr": every_values}), 0)
 
 every_some = {
     "type": "every",

@@ -314,8 +314,8 @@ fn evalExprBool(
         },
         .compare => |c| (try evalCompare(c, input, scope, depth + 1)) orelse false,
         .not => |inner| (try evalNegation(inner, input, scope, depth + 1)) orelse false,
-        .some => |it| try evalSome(it, input, scope, depth + 1),
-        .every => |it| try evalEvery(it, input, scope, depth + 1),
+        .some => |it| (try evalSome(it, input, scope, depth + 1)) orelse false,
+        .every => |it| (try evalEvery(it, input, scope, depth + 1)) orelse false,
         .call => |c| truthy(try evalCall(c, input, scope, depth + 1)),
         // Only meaningful as a body statement, where `evalBodyScoped`
         // handles it. Reached here it would have nothing to scope over,
@@ -366,6 +366,10 @@ fn evalNegation(
         // Lifting runs before either negation, so a lifted term that is
         // undefined fails the body however many `not`s enclose it.
         .not => |inner2| return !((try evalNegation(inner2, input, scope, depth + 1)) orelse return null),
+        // An iteration over an undefined source is undefined; negating it
+        // fails the body instead of allowing on a missing field.
+        .some => |it| return !((try evalSome(it, input, scope, depth + 1)) orelse return null),
+        .every => |it| return !((try evalEvery(it, input, scope, depth + 1)) orelse return null),
         else => return !(try evalExprBool(inner, input, scope, depth)),
     }
 }
@@ -423,6 +427,8 @@ fn resolveDefined(
         // than reaching the outer one as a defined `nil`.
         .compare => |c| if (try evalCompare(c, input, scope, depth)) |held| .{ .boolean = held } else null,
         .not => |inner| if (try evalNegation(inner, input, scope, depth)) |held| .{ .boolean = held } else null,
+        .some => |it| if (try evalSome(it, input, scope, depth)) |held| .{ .boolean = held } else null,
+        .every => |it| if (try evalEvery(it, input, scope, depth)) |held| .{ .boolean = held } else null,
         else => try resolveOperandLifted(operand, input, scope, depth),
     };
 }
@@ -475,16 +481,18 @@ const ItemIter = union(enum) {
 };
 
 /// `some x in source: body`. True if the body holds for at least
-/// one binding. A non-iterable source yields `false`.
+/// one binding; `null` (undefined) when the source is undefined or not
+/// a collection, so that a negation of it fails the body rather than
+/// reading a missing field as "none match".
 fn evalSome(
     it: ast.Expr.Iter,
     input: json.Value,
     scope: ?*const Scope,
     depth: u32,
-) HelperError!bool {
+) HelperError!?bool {
     if (depth >= max_eval_depth) return error.EvalTooDeep;
     const items = try iterItems(it.source, it.kind, input, scope, depth + 1);
-    if (items == .none) return false;
+    if (items == .none) return null;
     var i: usize = 0;
     while (i < items.len()) : (i += 1) {
         const child = Scope{ .parent = scope, .name = it.var_name, .bound = items.at(i) };
@@ -494,19 +502,20 @@ fn evalSome(
 }
 
 /// `every x in source: body`. Vacuously true on an empty collection, but
-/// false on a source that is undefined or not a collection: OPA does
-/// not fire the rule there, and treating a missing field as "nothing to
-/// check" let `every v in input.attrs { v != "internal" }` allow a
-/// request with no `attrs` at all.
+/// undefined (`null`) on a source that is undefined or not a collection:
+/// OPA does not fire the rule there, and treating a missing field as
+/// "nothing to check" let `every v in input.attrs { v != "internal" }`
+/// allow a request with no `attrs` at all. Undefined rather than false
+/// so that a hand-built `not every ...` fails the body too.
 fn evalEvery(
     it: ast.Expr.Iter,
     input: json.Value,
     scope: ?*const Scope,
     depth: u32,
-) HelperError!bool {
+) HelperError!?bool {
     if (depth >= max_eval_depth) return error.EvalTooDeep;
     const items = try iterItems(it.source, it.kind, input, scope, depth + 1);
-    if (items == .none) return false;
+    if (items == .none) return null;
     var i: usize = 0;
     while (i < items.len()) : (i += 1) {
         const child = Scope{ .parent = scope, .name = it.var_name, .bound = items.at(i) };
@@ -559,8 +568,8 @@ fn resolveValue(
         },
         .compare => |c| if (try evalCompare(c, input, scope, depth + 1)) |held| .{ .boolean = held } else .nil,
         .not => |inner| if (try evalNegation(inner, input, scope, depth + 1)) |held| .{ .boolean = held } else .nil,
-        .some => |it| .{ .boolean = try evalSome(it, input, scope, depth + 1) },
-        .every => |it| .{ .boolean = try evalEvery(it, input, scope, depth + 1) },
+        .some => |it| if (try evalSome(it, input, scope, depth + 1)) |held| .{ .boolean = held } else .nil,
+        .every => |it| if (try evalEvery(it, input, scope, depth + 1)) |held| .{ .boolean = held } else .nil,
         .call => |c| try evalCall(c, input, scope, depth + 1),
         .assign => return error.AssignOutsideBody,
     };
@@ -1108,12 +1117,26 @@ test "every: an undefined or non-collection source does not hold" {
     try testing.expect(try run("{\"attrs\":{}}", policy));
 
     // `not every` cannot be written in Rego (`illegal negation of
-    // 'every'`), only in hand-built AST. There it negates the boolean,
-    // so a missing source makes it hold: pinned so the polarity is a
-    // decision rather than an accident.
+    // 'every'`), only in hand-built AST. A source zopa cannot iterate is
+    // undefined, so its negation fails the body rather than allowing on
+    // a missing field.
     const negated = "{\"type\":\"not\",\"expr\":" ++ policy ++ "}";
-    try testing.expect(try run("{}", negated));
+    try testing.expect(!(try run("{}", negated)));
+    try testing.expect(!(try run("{\"attrs\":null}", negated)));
+    try testing.expect(!(try run("{\"attrs\":\"internal\"}", negated)));
     try testing.expect(!(try run("{\"attrs\":[\"ok\"]}", negated)));
+    try testing.expect(try run("{\"attrs\":[\"internal\"]}", negated));
+
+    // The same for `some`, and in value position.
+    const not_some =
+        "{\"type\":\"not\",\"expr\":{\"type\":\"some\",\"var\":\"v\"," ++
+        "\"source\":{\"type\":\"ref\",\"path\":[\"input\",\"attrs\"]}," ++
+        "\"body\":{\"type\":\"value\",\"value\":true}}}";
+    try testing.expect(!(try run("{}", not_some)));
+    try testing.expect(try run("{\"attrs\":[]}", not_some));
+    const neq_true = "{\"type\":\"neq\",\"left\":" ++ policy ++ ",\"right\":{\"type\":\"value\",\"value\":true}}";
+    try testing.expect(!(try run("{}", neq_true)));
+    try testing.expect(try run("{\"attrs\":[\"internal\"]}", neq_true));
 }
 
 test "compare: an undefined side makes the comparison undefined" {

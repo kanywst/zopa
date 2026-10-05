@@ -326,6 +326,17 @@ check('every: one mismatch -> deny', decide({ tags: ['admin', 'guest'] }, everyA
 check('every: vacuously true on empty -> allow', decide({ tags: [] }, everyAdmin), 1);
 check('every: missing source does not hold -> deny', decide({}, everyAdmin), 0);
 check('every: scalar source does not hold -> deny', decide({ tags: 'admin' }, everyAdmin), 0);
+check('every: null source does not hold -> deny', decide({ tags: null }, everyAdmin), 0);
+{
+  const everyValues = {
+    type: 'every', var: 'v', kind: 'values',
+    source: { type: 'ref', path: ['input', 'attrs'] },
+    body: { type: 'neq', left: { type: 'ref', path: ['v'] }, right: { type: 'value', value: 'internal' } },
+  };
+  check('every values: a key named internal passes -> allow', decide({ attrs: { internal: 'ok' } }, everyValues), 1);
+  check('every values: a value named internal fails -> deny', decide({ attrs: { a: 'internal' } }, everyValues), 0);
+  check('not every: missing source fails the body -> deny', decide({}, { type: 'not', expr: everyValues }), 0);
+}
 
 // some over a set literal in the AST
 const someInLiteralSet = {

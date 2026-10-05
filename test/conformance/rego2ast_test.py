@@ -178,6 +178,7 @@ class Conversions(unittest.TestCase):
     def test_every_with_a_wildcard_key_converts(self):
         ast = self.assertConverts('allow if every _, v in input.m { v != "x" }')
         self.assertEqual(ast["rules"][0]["body"][0]["var"], "v")
+        self.assertEqual(ast["rules"][0]["body"][0]["kind"], "values")
 
 
 if __name__ == "__main__":
