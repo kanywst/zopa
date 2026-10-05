@@ -286,6 +286,24 @@ every_admin = dict(some_admin, type="every")
 check("every: all match -> allow", decide({"tags": ["admin", "admin"]}, every_admin), 1)
 check("every: one mismatch -> deny", decide({"tags": ["admin", "guest"]}, every_admin), 0)
 check("every: vacuously true on empty -> allow", decide({"tags": []}, every_admin), 1)
+check("every: missing source does not hold -> deny", decide({}, every_admin), 0)
+check("every: scalar source does not hold -> deny", decide({"tags": "admin"}, every_admin), 0)
+check("every: null source does not hold -> deny", decide({"tags": None}, every_admin), 0)
+every_values = {
+    "type": "every", "var": "v", "kind": "values",
+    "source": {"type": "ref", "path": ["input", "attrs"]},
+    "body": {"type": "neq", "left": {"type": "ref", "path": ["v"]}, "right": {"type": "value", "value": "internal"}},
+}
+check("every values: a key named internal passes -> allow", decide({"attrs": {"internal": "ok"}}, every_values), 1)
+check("every values: a value named internal fails -> deny", decide({"attrs": {"a": "internal"}}, every_values), 0)
+check("not every: missing source fails the body -> deny", decide({}, {"type": "not", "expr": every_values}), 0)
+some_any = {"type": "some", "var": "v", "source": {"type": "ref", "path": ["input", "attrs"]}, "body": {"type": "value", "value": True}}
+check("some: missing source -> deny", decide({}, some_any), 0)
+check("some: null source -> deny", decide({"attrs": None}, some_any), 0)
+check("some: scalar source -> deny", decide({"attrs": "x"}, some_any), 0)
+check("not some: missing source fails the body -> deny", decide({}, {"type": "not", "expr": some_any}), 0)
+check("not some: scalar source fails the body -> deny", decide({"attrs": "x"}, {"type": "not", "expr": some_any}), 0)
+check("not some: empty source -> allow", decide({"attrs": []}, {"type": "not", "expr": some_any}), 1)
 
 every_some = {
     "type": "every",

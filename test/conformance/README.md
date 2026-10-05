@@ -13,8 +13,9 @@ test/conformance/
     02_role_admin.json
     03_startswith_path.json
     04_not_banned.json
-    05_every_keys.json
+    05_every_values.json
     06_count_perms.json
+    ...
 ```
 
 Each fixture is a JSON object:
