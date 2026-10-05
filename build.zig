@@ -127,7 +127,7 @@ pub fn build(b: *std.Build) void {
     // reach the harness. Without this they are accepted and silently
     // dropped, which is how CI ended up running the full benchmark while
     // asking for the smoke one.
-    if (b.args) |args| bench_run.addArgs(args);
+    bench_run.addPassthruArgs();
     const bench_step = b.step(
         "bench",
         "Benchmark zopa against OPA (wasm + HTTP sidecar) in Node.js",

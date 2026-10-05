@@ -557,7 +557,7 @@ fn objectEqual(a: []const Value.Member, b: []const Value.Member) bool {
     // Match each entry of `a` against an unconsumed entry of `b`.
     // A consumed-bitmap stops a duplicate key in `a` from matching
     // the same `b` entry twice.
-    var consumed = [_]bool{false} ** object_match_max;
+    var consumed: [object_match_max]bool = @splat(false);
     outer: for (a) |ea| {
         for (b, 0..) |eb, i| {
             if (consumed[i]) continue;

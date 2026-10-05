@@ -2,7 +2,7 @@
 
 Tiny, zero-allocation authorization engine for proxy-wasm and the edge. ~76 KB. No GC. No deps.
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![CI](https://github.com/kanywst/zopa/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/zopa/actions/workflows/ci.yml) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/kanywst/zopa/badge)](https://securityscorecards.dev/viewer/?uri=github.com/kanywst/zopa) [![Zig](https://img.shields.io/badge/zig-0.16.0-orange.svg)](https://ziglang.org)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![CI](https://github.com/kanywst/zopa/actions/workflows/ci.yml/badge.svg)](https://github.com/kanywst/zopa/actions/workflows/ci.yml) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/kanywst/zopa/badge)](https://securityscorecards.dev/viewer/?uri=github.com/kanywst/zopa) [![Zig](https://img.shields.io/badge/zig-0.17.0-orange.svg)](https://ziglang.org)
 
 **What it is:** an authorization engine that fits in a proxy-wasm filter, so you can enforce policy at the edge without putting a 40 MB sidecar next to every proxy.
 
@@ -131,7 +131,7 @@ Four of these are worth reading twice if you have used zopa before v0.4.1. `with
 
 **Standards-shaped input.** An [OpenID AuthZEN][authzen] Access Evaluation request is already a valid zopa input -- no adapter, no field renaming. See [`docs/authzen.md`](docs/authzen.md).
 
-**No external dependencies.** Just Zig 0.16+ stdlib. The whole code fits in `src/` and reads top-to-bottom.
+**No external dependencies.** Just Zig 0.17+ stdlib. The whole code fits in `src/` and reads top-to-bottom.
 
 [authzen]: https://openid.net/specs/authorization-api-1_0.html
 
@@ -256,7 +256,7 @@ More detail in [`docs/architecture.md`](docs/architecture.md).
 
 ## Building from source
 
-You need Zig 0.16.0:
+You need Zig 0.17.0:
 
 ```bash
 brew install zig                # or download from ziglang.org
