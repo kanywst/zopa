@@ -17,6 +17,10 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 [authzen]: https://openid.net/specs/authorization-api-1_0.html
 [pw]: https://github.com/proxy-wasm/spec
 
+## Done in v0.6.1
+
+- **Zig 0.17.0**, and a parse error for number literals past `f64`'s range (a Go backend rejects them). Numbers compare as `f64` by design, documented against OPA's exact decimals.
+
 ## Done in v0.6.0
 
 - **Cedar measured natively.** `bench/native/cedar` links `cedar-policy` in and times itself, so the benchmark no longer has to caveat its Cedar row as a measurement of the WASM binding. The binding was costing Cedar 3-4x; what is left after that is request conversion rather than evaluation, and Cedar's evaluator answers the RBAC fixture in 1.63 us against `zopa-compiled`'s 1.37. Opt-in, since building it pulls ~100 crates. This closes the last item of `docs/proposals/benchmark-harness.md`.
