@@ -120,7 +120,7 @@ Footprint and start-up:
 
 | | zopa | OPA (wasm) | OPA (HTTP sidecar) |
 | --- | --- | --- | --- |
-| deployed artifact | **76 KiB**, all policies | 131 KiB **per policy** | — |
+| deployed artifact | **74 KiB**, all policies | 131 KiB **per policy** | — |
 | memory after warm-up | 1.3–1.6 MiB | **128 KiB** | 23 MiB |
 | cold start | **0.4–1.3 ms** | 0.5–1.5 ms | 57–60 ms |
 

@@ -4,6 +4,16 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-06
+
+A patch for one more parser disagreement, and the move to Zig 0.17.0.
+
+**Fixed**: a number literal past `f64`'s range (`1e999`) parsed as infinity, where a Go backend rejects the document. It is a parse error now, so the request denies. Upgrading changes nothing else a policy can observe. The f64 reading of large integers is unchanged, and is now documented as deliberate.
+
+**Toolchain**: built with Zig 0.17.0. Building from source needs 0.17 now. The module is smaller for it, and the Docker build verifies the compiler's signature.
+
+Release build: **75824 bytes (~74 KB)**, down 2071 from v0.6.0. Zig 0.17 alone accounts for -1794 (77895 → 76101 on the same source); the rest moved when the range check merged on top.
+
 ### Fixed
 
 - **A number literal past `f64`'s range parsed as infinity.** `{"n": 1e999}` read as `+Inf`, so `input.n > 5` held, while Go's `encoding/json` rejects the document as out of range -- a value the backend never sees deciding the request. Such a literal is now a parse error (`-1`, deny). Underflow (`1e-999`) still reads as `0`, matching Go.
@@ -264,7 +274,8 @@ First tagged release. Public surface (export names, AST schema, callback semanti
 
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
-[Unreleased]: https://github.com/kanywst/zopa/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/kanywst/zopa/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/kanywst/zopa/releases/tag/v0.6.1
 [0.6.0]: https://github.com/kanywst/zopa/releases/tag/v0.6.0
 [0.5.0]: https://github.com/kanywst/zopa/releases/tag/v0.5.0
 [0.4.1]: https://github.com/kanywst/zopa/releases/tag/v0.4.1
