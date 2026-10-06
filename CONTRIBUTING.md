@@ -9,7 +9,7 @@ Thanks for considering a contribution. zopa is small enough that nothing here sh
 
 ## Local setup
 
-You need Zig 0.16.0, Node 22+, and Python 3.12+.
+You need Zig 0.17.0, Node 22+, and Python 3.12+.
 
 ```bash
 zig build           # builds zig-out/bin/zopa.wasm
@@ -57,7 +57,7 @@ Two habits worth keeping. Write the test so it fails for the reason you think it
 
 `src/json.zig`, `src/eval.zig`, and `src/wire.zig` carry `std.testing.fuzz` targets over the three surfaces that take hostile bytes: the JSON parser, end-to-end evaluation, and the proxy-wasm header-map decoder. They run as single-iteration smoke tests during a normal `zig build test-unit`.
 
-Running them as actual fuzzers (`zig build test-unit --fuzz`) does not work on Zig 0.16.0: the toolchain's own `compiler/test_runner.zig` fails to compile in fuzz mode with a `StackTrace` type mismatch. That is upstream, not something this repository can fix. The targets are written so they start working the moment it is.
+Run them as actual fuzzers with `zig build test-unit --fuzz` (for example `--fuzz=100K` to bound the run). On Zig 0.16.0 this failed to compile inside the toolchain's own test runner; it works from Zig 0.17.0, which is why the repository pins it.
 
 ## Code style
 

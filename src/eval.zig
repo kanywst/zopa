@@ -1281,8 +1281,12 @@ test "not: an undefined argument to a call fails the body, as in OPA" {
     // A call zopa cannot make never reaches evaluation, negated or not.
     const nine_args =
         "{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"count\",\"args\":[" ++
-        ("{\"type\":\"value\",\"value\":1}," ** 8) ++
-        "{\"type\":\"value\",\"value\":1}]}}";
+        comptime eight: {
+            var args: []const u8 = "";
+            for (0..8) |_| args = args ++ "{\"type\":\"value\",\"value\":1},";
+            break :eight args;
+        } ++
+            "{\"type\":\"value\",\"value\":1}]}}";
     try testing.expectError(error.BuiltinArity, run("{}", nine_args));
     try testing.expectError(error.BuiltinArity, run("{}", nine_args["{\"type\":\"not\",\"expr\":".len .. nine_args.len - 1]));
 
