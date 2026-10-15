@@ -34,7 +34,7 @@ jobs:
           ls -l zig-out/bin/zopa.wasm
           wc -c zig-out/bin/zopa.wasm
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.os == 'ubuntu-latest'
         with:
           name: zopa.wasm
@@ -72,7 +72,7 @@ jobs:
       # Deoptimizer::DoComputeBuiltinContinuation when the Cedar wasm
       # binding is driven in a hot loop -- a V8 crash, not a harness
       # failure. The other jobs never touch Cedar and stay on 22.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -134,7 +134,7 @@ jobs:
       - name: check for a performance regression
         run: node bench/compare.mjs bench-smoke.json bench/results/baseline.json
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: bench-smoke
@@ -152,7 +152,7 @@ jobs:
         with:
           version: 0.17.0
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
