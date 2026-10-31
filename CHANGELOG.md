@@ -6,6 +6,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ### Fixed
 
+- **`rego2ast.py` turned a variable inside a ref into a literal key.** `input.xs[i]` converted to the path `["input", "xs", "i"]`, a lookup of the key `"i"` rather than of the value bound to `i`. `allow if every i in input.idx { input.xs[i] == 1 }` allowed `{"idx": [0], "xs": {"i": 1}}`, which `opa eval` denies. A variable anywhere past the head of a ref is now refused. `input.xs[_]` was the same bug -- OPA renames `_` to `$0`, so it looked up the key `"$0"` and never iterated -- and is refused too, so `zig build test-coverage` drops from 37/52 to 36/52: the construct was counted but never worked.
 - **`rego2ast.py` converted a rule whose value names a body binding.** `allow := y if { y := input.q }` became a rule returning `ref ["y"]`, but zopa evaluates a rule's value outside the body's scope, so the ref resolved against the input root and the rule never returned what OPA returns. It failed closed (the value was undefined, so the rule denied), but it converted fine and meant something else. The converter now refuses it.
 
 ## [0.6.1] - 2026-10-06

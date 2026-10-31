@@ -104,6 +104,14 @@ class Refusals(unittest.TestCase):
         # would resolve against the input root: never what OPA returns.
         self.assertRefused("allow := y if {\n\ty := input.q\n}", "returns body binding `y`")
 
+    def test_variable_inside_a_ref_is_refused(self):
+        # Converting the name as a literal key looked up `"i"`, not the
+        # value bound to `i` -- an allow OPA does not give.
+        self.assertRefused(
+            "allow if every i in input.idx { input.xs[i] == 1 }", "variable `i` inside a ref",
+        )
+        self.assertRefused('allow if input.roles[_] == "admin"', "inside a ref")
+
     def test_unnamed_operator_is_described(self):
         # The key-value form of `in` reaches OPA's AST as
         # internal.member_3 and has no bare name; reporting an empty one

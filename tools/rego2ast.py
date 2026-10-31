@@ -438,15 +438,27 @@ def walk_term_as_jsonvalue(term: dict[str, Any]) -> Any:
 def _ref_to_path(segments: list[dict[str, Any]]) -> list[str | int]:
     """Flatten an OPA ref into zopa's path array.
 
-    Strings and vars become key segments; a number becomes an array
-    index, which zopa's `ref` encodes as a JSON number in the same
-    array. The two stay distinct end to end -- an index never matches an
-    object key that happens to spell the same digits.
+    The head var (`input`, or a bound name) and string segments become
+    key segments; a number becomes an array index, which zopa's `ref`
+    encodes as a JSON number in the same array. The two stay distinct
+    end to end -- an index never matches an object key that happens to
+    spell the same digits.
     """
     path: list[str | int] = []
-    for seg in segments:
+    for i, seg in enumerate(segments):
         t = seg["type"]
         if t == "var":
+            # Past the head, a var is a lookup by the variable's *value*
+            # -- `input.xs[i]`, or `input.xs[_]` (OPA renames `_` to
+            # `$0`). zopa's path segments are literals, so appending the
+            # name looked up the key "i": `every i in input.idx {
+            # input.xs[i] == 1 }` allowed `{"idx": [0], "xs": {"i": 1}}`,
+            # which OPA denies.
+            if i > 0:
+                raise Unsupported(
+                    f"variable `{seg['value']}` inside a ref not supported: "
+                    "zopa ref segments are literal keys and indices"
+                )
             path.append(seg["value"])
         elif t == "string":
             path.append(seg["value"])
