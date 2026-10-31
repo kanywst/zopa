@@ -311,6 +311,8 @@ check("some list body: one element satisfies all -> allow",
 check("some list body: split across elements -> deny",
       decide({"users": [{"role": "admin", "active": False}, {"role": "dev", "active": True}]}, some_active_admin), 0)
 check("some list body: empty list holds per element -> allow", decide({"attrs": [0]}, dict(some_any, body=[])), 1)
+check("every: empty list body is refused, not vacuous -> -1",
+      decide({"attrs": [0]}, dict(some_any, type="every", body=[])), -1)
 check("some: assign as the sole object body -> -1",
       decide({"attrs": [0]}, dict(some_any, body={"type": "assign", "var": "x", "value": {"type": "value", "value": 1}})), -1)
 check("some: null source -> deny", decide({"attrs": None}, some_any), 0)

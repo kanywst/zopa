@@ -1013,6 +1013,16 @@ test "iter: an empty list body holds once per element" {
     try testing.expect(!try evaluate(&arena, "{}", policy));
 }
 
+test "iter: an empty every body is rejected, not vacuously true" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const policy =
+        \\{"type":"every","var":"x","source":{"type":"ref","path":["input","xs"]},"body":[]}
+    ;
+    try testing.expectError(error.EmptyEveryBody, evaluate(&arena, "{\"xs\":[1]}", policy));
+}
+
 test "iter: a list body carries assignments, scoped to one element" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
