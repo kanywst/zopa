@@ -1,5 +1,5 @@
 {
-  "supported": 37,
+  "supported": 36,
   "total": 52,
   "constructs": {
     "rule/constant": true,
@@ -37,7 +37,7 @@
     "iter/some-in": false,
     "iter/every-in": true,
     "iter/every-multi": false,
-    "iter/underscore": true,
+    "iter/underscore": false,
     "builtin/startswith": true,
     "builtin/endswith": true,
     "builtin/contains": true,
