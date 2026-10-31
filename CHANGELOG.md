@@ -7,7 +7,7 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 ### Added
 
 - **Standalone `some x in xs` converts.** The most common Rego v1 iteration form: `some u in input.users` followed by statements about `u`, all of which must hold for the same element. `rego2ast.py` turns the declaration into a `some` whose body is the rest of the rule body, binding an object's values as Rego does. `some k, v in xs` and `some x` without `in` are still refused.
-- **`some` / `every` bodies can be a statement list.** `"body": [<Expr>, ...]` is a conjunction evaluated like a rule body, so `:=` works inside it and its binding is scoped to one element. The single-expression form is unchanged, including refusing a lone assignment. This is what lets a standalone `some` hold the rest of a body, and it lifts the converter's single-expression limit on `every`, so `every x in xs { a; b }` converts too. `zig build test-coverage` goes from 36/52 to 38/52.
+- **`some` / `every` bodies can be a statement list.** `"body": [<Expr>, ...]` is a conjunction evaluated like a rule body, so `:=` works inside it and its binding is scoped to one element. The single-expression form is unchanged, including refusing a lone assignment. An empty list is valid on `some` and rejected on `every`, where it would hold unconditionally (OPA refuses it as an empty body). This is what lets a standalone `some` hold the rest of a body, and it lifts the converter's single-expression limit on `every`, so `every x in xs { a; b }` converts too. `zig build test-coverage` goes from 36/52 to 38/52.
 
 ### Fixed
 

@@ -431,7 +431,15 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
         // always holds. Inline rather than a helper because a helper
         // calling back into `buildExpr` is a dependency loop for the
         // inferred error sets.
+        //
+        // An empty list is a legitimate `some` -- `some x in xs` with
+        // nothing after it holds iff there is an element -- but an
+        // empty `every` would hold over any collection, an
+        // unconditional allow one truncated AST away. OPA refuses
+        // `every x in xs {}` at parse time ("found empty body"), so
+        // refuse it here too.
         const body: []const *const Expr = if (body_v == .array) blk: {
+            if (body_v.array.len == 0 and std.mem.eql(u8, t, "every")) return error.EmptyEveryBody;
             const buf = try allocator.alloc(*const Expr, body_v.array.len);
             for (body_v.array, 0..) |item, i| {
                 buf[i] = try buildExpr(allocator, item);

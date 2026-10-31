@@ -353,6 +353,8 @@ check('every: null source does not hold -> deny', decide({ tags: null }, everyAd
     decide({ users: [{ role: 'admin', active: false }, { role: 'dev', active: true }] }, someActiveAdmin), 0);
   check('some list body: empty list holds per element -> allow',
     decide({ attrs: [0] }, { ...someAny, body: [] }), 1);
+  check('every: empty list body is refused, not vacuous -> -1',
+    decide({ attrs: [0] }, { ...someAny, type: 'every', body: [] }), -1);
   check('some: assign as the sole object body -> -1',
     decide({ attrs: [0] }, { ...someAny, body: { type: 'assign', var: 'x', value: { type: 'value', value: 1 } } }), -1);
   check('some: null source -> deny', decide({ attrs: null }, someAny), 0);
