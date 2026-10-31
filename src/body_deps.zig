@@ -168,7 +168,15 @@ const RefKind = enum {
 /// ever saw the flag.
 fn classifyRef(path: []const ast.Expr.PathSegment) RefKind {
     var p = path;
-    if (p.len > 0 and p[0].isKey("input")) p = p[1..];
+    if (p.len > 0 and p[0].isKey("input")) {
+        // Bare `input` is the whole document, body included:
+        // `every v in input { not contains(v, "<script") }` walks
+        // `body_raw`. Classifying it as touching nothing let the shim
+        // evaluate a truncated prefix, where the deny never saw the
+        // part of the body it was looking for.
+        if (p.len == 1) return .whole;
+        p = p[1..];
+    }
     if (p.len == 0) return .none;
 
     // An index cannot name `body` or `body_raw`, so a path opening with
@@ -233,6 +241,21 @@ test "analyze: a body ref past the first statement of a list body counts" {
         "{\"type\":\"gt\",\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"amount\"]}," ++
         "\"right\":{\"type\":\"value\",\"value\":100}}]}";
     try testing.expectEqual(Class.prefix_only, try classify(policy));
+}
+test "analyze: bare input reaches the body -> full_tree" {
+    const iterated =
+        "{\"type\":\"every\",\"var\":\"v\",\"kind\":\"values\"," ++
+        "\"source\":{\"type\":\"ref\",\"path\":[\"input\"]}," ++
+        "\"body\":{\"type\":\"not\",\"expr\":{\"type\":\"call\",\"name\":\"contains\"," ++
+        "\"args\":[{\"type\":\"ref\",\"path\":[\"v\"]},{\"type\":\"value\",\"value\":\"<script\"}]}}}";
+    try testing.expectEqual(Class.full_tree, try classify(iterated));
+
+    // A binding of the whole document is the same read by another name.
+    const bound =
+        "{\"type\":\"module\",\"rules\":[{\"type\":\"rule\",\"name\":\"allow\",\"body\":[" ++
+        "{\"type\":\"assign\",\"var\":\"doc\",\"value\":{\"type\":\"ref\",\"path\":[\"input\"]}}," ++
+        "{\"type\":\"ref\",\"path\":[\"doc\",\"body\",\"x\"]}]}]}";
+    try testing.expectEqual(Class.full_tree, try classify(bound));
 }
 test "analyze: membership in input.body.items -> full_tree" {
     // `x in input.body.tags` scans the whole collection; a truncated
