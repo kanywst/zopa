@@ -79,9 +79,10 @@ pub const Expr = union(enum) {
 
     /// `x := <expr>` in a rule body. The binding is visible to every
     /// expression *after* it in the same body, which is what makes this
-    /// a body-level construct rather than another `Iter`: `some` and
-    /// `every` own the single expression they bind over, while an
-    /// assignment scopes over its siblings.
+    /// a statement rather than another `Iter`: an iterator owns the body
+    /// it binds over, while an assignment scopes over its siblings. An
+    /// iterator body written as a list is a statement list too, so an
+    /// assignment can appear there as well.
     pub const Assign = struct {
         var_name: []const u8,
         value: *const Expr,
@@ -107,12 +108,17 @@ pub const Expr = union(enum) {
     /// each element under `var_name` and runs `body`. `some` and
     /// `every` share this shape; only the body combination differs.
     ///
+    /// `body` is a conjunction, evaluated like a rule body. A slice
+    /// rather than one expression because Rego's standalone
+    /// `some x in xs` scopes over every statement after it, and `and`
+    /// is not an AST node, so a single expression could not hold them.
+    ///
     /// `kind` only matters when the source resolves to a JSON object;
     /// for arrays and sets it is ignored.
     pub const Iter = struct {
         var_name: []const u8,
         source: *const Expr,
-        body: *const Expr,
+        body: []const *const Expr,
         kind: IterKind = .keys,
     };
 
@@ -416,10 +422,33 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
             if (k_v != .string) return error.InvalidKind;
             break :blk Expr.IterKind.fromString(k_v.string) orelse return error.UnknownKind;
         } else .keys;
+        // The body is either one expression or a statement list. The
+        // list form is what `rego2ast.py` emits for a standalone
+        // `some x in xs`, whose binding covers the rest of the rule
+        // body. The single-expression form predates it and keeps its
+        // meaning: an assignment there has no siblings to scope over,
+        // so it is refused rather than read as a trailing binding that
+        // always holds. Inline rather than a helper because a helper
+        // calling back into `buildExpr` is a dependency loop for the
+        // inferred error sets.
+        const body: []const *const Expr = if (body_v == .array) blk: {
+            const buf = try allocator.alloc(*const Expr, body_v.array.len);
+            for (body_v.array, 0..) |item, i| {
+                buf[i] = try buildExpr(allocator, item);
+            }
+            try rejectReassignment(buf);
+            break :blk buf;
+        } else blk: {
+            const one = try buildExpr(allocator, body_v);
+            if (one.* == .assign) return error.AssignOutsideBody;
+            const buf = try allocator.alloc(*const Expr, 1);
+            buf[0] = one;
+            break :blk buf;
+        };
         const iter = Expr.Iter{
             .var_name = var_name,
             .source = try buildExpr(allocator, source_v),
-            .body = try buildExpr(allocator, body_v),
+            .body = body,
             .kind = kind,
         };
         expr.* = if (std.mem.eql(u8, t, "some"))

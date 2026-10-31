@@ -299,6 +299,20 @@ check("every values: a value named internal fails -> deny", decide({"attrs": {"a
 check("not every: missing source fails the body -> deny", decide({}, {"type": "not", "expr": every_values}), 0)
 some_any = {"type": "some", "var": "v", "source": {"type": "ref", "path": ["input", "attrs"]}, "body": {"type": "value", "value": True}}
 check("some: missing source -> deny", decide({}, some_any), 0)
+some_active_admin = {
+    "type": "some", "var": "u", "source": {"type": "ref", "path": ["input", "users"]},
+    "body": [
+        {"type": "eq", "left": {"type": "ref", "path": ["u", "role"]}, "right": {"type": "value", "value": "admin"}},
+        {"type": "ref", "path": ["u", "active"]},
+    ],
+}
+check("some list body: one element satisfies all -> allow",
+      decide({"users": [{"role": "admin", "active": True}]}, some_active_admin), 1)
+check("some list body: split across elements -> deny",
+      decide({"users": [{"role": "admin", "active": False}, {"role": "dev", "active": True}]}, some_active_admin), 0)
+check("some list body: empty list holds per element -> allow", decide({"attrs": [0]}, dict(some_any, body=[])), 1)
+check("some: assign as the sole object body -> -1",
+      decide({"attrs": [0]}, dict(some_any, body={"type": "assign", "var": "x", "value": {"type": "value", "value": 1}})), -1)
 check("some: null source -> deny", decide({"attrs": None}, some_any), 0)
 check("some: scalar source -> deny", decide({"attrs": "x"}, some_any), 0)
 check("not some: missing source fails the body -> deny", decide({}, {"type": "not", "expr": some_any}), 0)

@@ -103,7 +103,7 @@ fn visit(st: *State, expr: *const ast.Expr) void {
         .not => |inner| visit(st, inner),
         .some, .every => |it| {
             visit(st, it.source);
-            visit(st, it.body);
+            for (it.body) |b| visit(st, b);
             // Iterating over a ref into the body is full-tree:
             // the iterator needs the entire collection. The source
             // visit above marks the path; we promote to whole if
@@ -221,6 +221,19 @@ test "analyze: iterate input.body.items -> full_tree" {
     try testing.expectEqual(Class.full_tree, try classify(policy));
 }
 
+test "analyze: a body ref past the first statement of a list body counts" {
+    // The list form exists so a standalone `some` can scope over the
+    // rest of a rule body. Reading only the first statement would miss
+    // a body ref further down and let the shim evaluate a truncated
+    // prefix.
+    const policy =
+        "{\"type\":\"some\",\"var\":\"x\"," ++
+        "\"source\":{\"type\":\"value\",\"value\":[1]}," ++
+        "\"body\":[{\"type\":\"value\",\"value\":true}," ++
+        "{\"type\":\"gt\",\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"amount\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":100}}]}";
+    try testing.expectEqual(Class.prefix_only, try classify(policy));
+}
 test "analyze: membership in input.body.items -> full_tree" {
     // `x in input.body.tags` scans the whole collection; a truncated
     // body could drop the element a deny rule was looking for.

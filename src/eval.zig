@@ -228,9 +228,8 @@ fn evalBody(body: []const *const ast.Expr, input: json.Value) !bool {
 /// Recursive rather than a flat loop because `assign` scopes over its
 /// *siblings*: `x := input.x` has to be visible to every expression
 /// after it, so the rest of the body is evaluated inside a frame the
-/// assignment pushes. `some` and `every` do not need this -- each owns
-/// the single expression it binds over -- which is why the scope chain
-/// existed without it until now.
+/// assignment pushes. `some` and `every` bodies run through here too,
+/// inside the frame that binds their variable.
 fn evalBodyScoped(
     body: []const *const ast.Expr,
     input: json.Value,
@@ -529,7 +528,7 @@ fn evalSome(
     var i: usize = 0;
     while (i < items.len()) : (i += 1) {
         const child = Scope{ .parent = scope, .name = it.var_name, .bound = items.at(i) };
-        if (try evalExprBool(it.body, input, &child, depth + 1)) return true;
+        if (try evalBodyScoped(it.body, input, &child, depth + 1)) return true;
     }
     return false;
 }
@@ -552,7 +551,7 @@ fn evalEvery(
     var i: usize = 0;
     while (i < items.len()) : (i += 1) {
         const child = Scope{ .parent = scope, .name = it.var_name, .bound = items.at(i) };
-        if (!try evalExprBool(it.body, input, &child, depth + 1)) return false;
+        if (!try evalBodyScoped(it.body, input, &child, depth + 1)) return false;
     }
     return true;
 }
@@ -965,6 +964,80 @@ test "assign: nested where it cannot scope, it is an error" {
         \\ "body":{"type":"assign","var":"x","value":{"type":"value","value":1}}}
     ;
     try testing.expectError(error.AssignOutsideBody, evaluate(&arena, "{}", as_iter_body));
+}
+
+test "iter: a list body is a conjunction over the bound variable" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // `some u in input.users; u.role == "admin"; u.active` -- both
+    // statements must hold for the *same* element. Two separate `some`s
+    // would accept one admin who is inactive plus another who is active.
+    const policy =
+        \\{"type":"some","var":"u","source":{"type":"ref","path":["input","users"]},
+        \\ "body":[
+        \\  {"type":"eq","left":{"type":"ref","path":["u","role"]},"right":{"type":"value","value":"admin"}},
+        \\  {"type":"ref","path":["u","active"]}]}
+    ;
+    try testing.expect(try evaluate(&arena,
+        \\{"users":[{"role":"dev","active":true},{"role":"admin","active":true}]}
+    , policy));
+    try testing.expect(!try evaluate(&arena,
+        \\{"users":[{"role":"admin","active":false},{"role":"dev","active":true}]}
+    , policy));
+    try testing.expect(!try evaluate(&arena, "{}", policy));
+
+    // `every` over a list body: every element satisfies every statement.
+    const all =
+        \\{"type":"every","var":"x","source":{"type":"ref","path":["input","xs"]},
+        \\ "body":[
+        \\  {"type":"gt","left":{"type":"ref","path":["x"]},"right":{"type":"value","value":0}},
+        \\  {"type":"lt","left":{"type":"ref","path":["x"]},"right":{"type":"value","value":10}}]}
+    ;
+    try testing.expect(try evaluate(&arena, "{\"xs\":[1,9]}", all));
+    try testing.expect(!try evaluate(&arena, "{\"xs\":[1,10]}", all));
+}
+
+test "iter: an empty list body holds once per element" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // `allow if { some x in input.xs }` with nothing after it: true iff
+    // there is an element to bind, as in OPA.
+    const policy =
+        \\{"type":"some","var":"x","source":{"type":"ref","path":["input","xs"]},"body":[]}
+    ;
+    try testing.expect(try evaluate(&arena, "{\"xs\":[false]}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"xs\":[]}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"xs\":\"abc\"}", policy));
+    try testing.expect(!try evaluate(&arena, "{}", policy));
+}
+
+test "iter: a list body carries assignments, scoped to one element" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const policy =
+        \\{"type":"some","var":"u","source":{"type":"ref","path":["input","users"]},
+        \\ "body":[
+        \\  {"type":"assign","var":"r","value":{"type":"ref","path":["u","role"]}},
+        \\  {"type":"eq","left":{"type":"ref","path":["r"]},"right":{"type":"ref","path":["input","want"]}}]}
+    ;
+    try testing.expect(try evaluate(&arena, "{\"want\":\"b\",\"users\":[{\"role\":\"a\"},{\"role\":\"b\"}]}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"want\":\"c\",\"users\":[{\"role\":\"a\"},{\"role\":\"b\"}]}", policy));
+    // An element without the field makes that iteration undefined, not
+    // a null binding that would match a missing `want`.
+    try testing.expect(!try evaluate(&arena, "{\"users\":[{}]}", policy));
+
+    // Binding one name twice in the same list is rejected at build time,
+    // like a rule body.
+    const twice =
+        \\{"type":"some","var":"u","source":{"type":"value","value":[1]},
+        \\ "body":[
+        \\  {"type":"assign","var":"r","value":{"type":"value","value":1}},
+        \\  {"type":"assign","var":"r","value":{"type":"value","value":2}}]}
+    ;
+    try testing.expectError(error.DuplicateAssignment, evaluate(&arena, "{}", twice));
 }
 
 test "ref: a long plain-key path is not capped by the recursion budget" {
