@@ -5,10 +5,12 @@
 # callbacks, body buffering, and send_local_response. The generic-ABI
 # suites call `evaluate` directly and can't reach any of it.
 #
-# Two scenarios, each with its own bootstrap and its own Envoy process:
+# Each scenario has its own bootstrap and its own Envoy process:
 #
-#   request  envoy.yaml          allow iff method == GET
-#   phases   envoy-phases.yaml   allow_body + allow_response rules
+#   request     envoy.yaml             allow iff method == GET
+#   phases      envoy-phases.yaml      allow_body + allow_response rules
+#   bare-input  envoy-bare-input.yaml  allow_body reading the body only
+#                                      through the whole `input`
 #   targets  envoy-targets.yaml  an explicit `targets` block: one
 #                                enforcing rule and one advisory
 #
@@ -311,6 +313,33 @@ check "POST with an empty body -> 200 (host skips the body phase)" 200 \
     --data '' "$base/"
 
 check "GET /teapot -> 503 response deny" 503 -X GET "$base/teapot"
+
+stop_envoy
+
+# ---------------------------------------------------------------------------
+# Scenario 2b: a policy that reaches the body only through bare `input`.
+#
+# `some v in input; contains(v, "BLOCKED")` reads `body_raw` without
+# naming it. The truncation gate keys off the body-deps class, so if
+# bare `input` classified as touching nothing, an oversized body would
+# be evaluated on its prefix and the marker past the cap would be
+# missed -- a 200 where the full body denies.
+# ---------------------------------------------------------------------------
+echo
+echo "-- scenario: bare-input ($RUNTIME)"
+start_envoy envoy-bare-input.yaml
+
+check "POST clean body -> 200" 200 \
+    -X POST -H "Content-Type: text/plain" \
+    --data 'nothing to see' "$base/"
+
+check "POST marker in body -> 403 (reached through input)" 403 \
+    -X POST -H "Content-Type: text/plain" \
+    --data 'this payload is BLOCKED' "$base/"
+
+check "POST marker past the cap -> 403 fail closed" 403 \
+    -X POST -H "Content-Type: text/plain" \
+    --data-binary "@$WORK/raw-oversized.txt" "$base/"
 
 stop_envoy
 
