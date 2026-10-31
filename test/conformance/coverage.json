@@ -1,5 +1,5 @@
 {
-  "supported": 38,
+  "supported": 37,
   "total": 52,
   "constructs": {
     "rule/constant": true,
@@ -30,7 +30,7 @@
     "ref/bracket": true,
     "ref/array-index": true,
     "ref/array-index-nested": true,
-    "ref/data": true,
+    "ref/data": false,
     "logic/and": true,
     "logic/not": true,
     "logic/truthy": true,

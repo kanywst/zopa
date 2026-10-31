@@ -140,7 +140,49 @@ def walk_rule(rule: dict[str, Any]) -> dict[str, Any]:
             )
         out["value"] = walk_term_as_value(head_val)
 
+    _check_scope(out["body"], frozenset())
+    if "value" in out:
+        _check_expr_scope(out["value"], frozenset())
     return out
+
+
+# zopa resolves a ref whose head is not a binding in scope against the
+# input root -- `ref ["is_admin"]` reads `input.is_admin`. A Rego name
+# that is neither `input` nor bound by then is something else: another
+# rule (`allow if is_admin`), the `data` document, or a name used before
+# its declaration. Converting any of them lets the request supply the
+# value: `{"is_admin": true}` allowed where `opa eval` is undefined.
+# Checked on the emitted AST, where the scoping is the evaluator's.
+def _check_scope(body: list[dict[str, Any]], scope: frozenset[str]) -> None:
+    for expr in body:
+        _check_expr_scope(expr, scope)
+        if expr.get("type") == "assign":
+            scope = scope | {expr["var"]}
+
+
+def _check_expr_scope(expr: dict[str, Any], scope: frozenset[str]) -> None:
+    t = expr.get("type")
+    if t == "ref":
+        head = expr["path"][0]
+        if head != "input" and head not in scope:
+            raise Unsupported(
+                f"`{head}` is not `input` or a name bound at this point: references to other "
+                "rules, to `data`, or to a name before its declaration would be read from the input"
+            )
+    elif t in ("compare", "in"):
+        _check_expr_scope(expr["left"], scope)
+        _check_expr_scope(expr["right"], scope)
+    elif t == "not":
+        _check_expr_scope(expr["expr"], scope)
+    elif t == "call":
+        for a in expr["args"]:
+            _check_expr_scope(a, scope)
+    elif t == "assign":
+        _check_expr_scope(expr["value"], scope)
+    elif t in ("some", "every"):
+        _check_expr_scope(expr["source"], scope)
+        body = expr["body"]
+        _check_scope(body if isinstance(body, list) else [body], scope | {expr["var"]})
 
 
 def _body_bindings(body: list[dict[str, Any]]) -> set[str]:
@@ -161,7 +203,9 @@ def _body_bindings(body: list[dict[str, Any]]) -> set[str]:
     return names
 
 
-def walk_body(exprs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def walk_body(
+    exprs: list[dict[str, Any]], claimed: frozenset[str] = frozenset()
+) -> list[dict[str, Any]]:
     """Convert one Rego body -- a rule's, or an `every`'s -- into a
     zopa statement list.
 
@@ -177,7 +221,11 @@ def walk_body(exprs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # runs `opa parse`, which accepts both, and once a `some` nests the
     # rest of the body the module's own per-list check cannot see across
     # the nesting -- so the converter checks the flat statement list.
-    seen: dict[str, str] = {}
+    # `claimed` carries names the enclosing construct binds in this same
+    # scope -- an `every`'s own variable, which OPA refuses to redeclare
+    # in its body. Names from enclosing scopes may be shadowed and are
+    # not passed.
+    seen: dict[str, str] = {name: "some" for name in claimed}
 
     def claim(name: str, how: str) -> None:
         if re.fullmatch(r"\$\d+", name):
@@ -407,7 +455,10 @@ def walk_call_form(terms: list[dict[str, Any]]) -> dict[str, Any]:
 
 def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
     domain = walk_term(terms["domain"])
-    body_exprs = walk_body(terms.get("body", []))
+    value = terms.get("value")
+    if value is None or value.get("type") != "var":
+        raise Unsupported("every: missing iteration variable name")
+    body_exprs = walk_body(terms.get("body", []), frozenset({value["value"]}))
     # One plain expression keeps the single-expression form; anything
     # else -- several statements, or a lone binding the object form
     # would refuse -- goes out as a statement list.
@@ -415,10 +466,6 @@ def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
         body_inner: Any = body_exprs[0]
     else:
         body_inner = body_exprs
-
-    value = terms.get("value")
-    if value is None or value.get("type") != "var":
-        raise Unsupported("every: missing iteration variable name")
 
     # `every k, v in xs` binds the key as well. zopa's `every` binds one
     # variable, and dropping `k` would leave it a bare ref resolving

@@ -136,6 +136,28 @@ class Refusals(unittest.TestCase):
         )
         self.assertRefused('allow if input.roles[_] == "admin"', "inside a ref")
 
+    def test_reference_to_another_rule_is_refused(self):
+        # zopa would read `is_admin` from the input root: a request
+        # carrying `{"is_admin": true}` allowed where OPA is undefined.
+        self.assertRefused(
+            'is_admin if input.role == "admin"\n\nallow if { is_admin }',
+            "`is_admin` is not `input` or a name bound",
+        )
+
+    def test_data_reference_is_refused(self):
+        self.assertRefused("allow if data.flag == true", "`data` is not `input`")
+
+    def test_name_used_before_its_declaration_is_refused(self):
+        # `opa check`: var x referenced above.
+        self.assertRefused("allow if {\n\tx == 1\n\tsome x in input.xs\n}", "`x` is not `input`")
+        self.assertRefused("allow if {\n\tx == 1\n\tx := 2\n}", "`x` is not `input`")
+
+    def test_every_variable_redeclared_in_its_body_is_refused(self):
+        # `opa check`: var x declared above.
+        self.assertRefused(
+            "allow if every x in input.xs {\n\tx := 1\n\tx == 1\n}", "`x` is declared twice",
+        )
+
     def test_unnamed_operator_is_described(self):
         # The key-value form of `in` reaches OPA's AST as
         # internal.member_3 and has no bare name; reporting an empty one
