@@ -1048,6 +1048,15 @@ test "iter: a list body carries assignments, scoped to one element" {
         \\  {"type":"assign","var":"r","value":{"type":"value","value":2}}]}
     ;
     try testing.expectError(error.DuplicateAssignment, evaluate(&arena, "{}", twice));
+
+    // Nor may the list rebind the iterator's own variable.
+    const rebinds_var =
+        \\{"type":"some","var":"u","source":{"type":"value","value":[1]},
+        \\ "body":[
+        \\  {"type":"assign","var":"u","value":{"type":"value","value":2}},
+        \\  {"type":"eq","left":{"type":"ref","path":["u"]},"right":{"type":"value","value":2}}]}
+    ;
+    try testing.expectError(error.DuplicateAssignment, evaluate(&arena, "{}", rebinds_var));
 }
 
 test "ref: a long plain-key path is not capped by the recursion budget" {

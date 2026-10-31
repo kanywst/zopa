@@ -445,6 +445,15 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
                 buf[i] = try buildExpr(allocator, item);
             }
             try rejectReassignment(buf);
+            // The iterator's own variable is in the same scope as the
+            // list: OPA refuses `some u in xs; u := ...` as "var u
+            // declared above". rego2ast.py catches it, but a hand-built
+            // AST reaches here directly, and shadowing the element
+            // would silently test something other than what was bound.
+            for (buf) |stmt| switch (stmt.*) {
+                .assign => |a| if (std.mem.eql(u8, a.var_name, var_name)) return error.DuplicateAssignment,
+                else => {},
+            };
             break :blk buf;
         } else blk: {
             const one = try buildExpr(allocator, body_v);

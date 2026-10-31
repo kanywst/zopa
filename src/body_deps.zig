@@ -241,6 +241,17 @@ test "analyze: a body ref past the first statement of a list body counts" {
         "{\"type\":\"gt\",\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"amount\"]}," ++
         "\"right\":{\"type\":\"value\",\"value\":100}}]}";
     try testing.expectEqual(Class.prefix_only, try classify(policy));
+
+    // Same through `every`, and through a `not` wrapping the iterator.
+    const every_policy =
+        "{\"type\":\"every\",\"var\":\"x\"," ++
+        "\"source\":{\"type\":\"value\",\"value\":[1]}," ++
+        "\"body\":[{\"type\":\"value\",\"value\":true}," ++
+        "{\"type\":\"gt\",\"left\":{\"type\":\"ref\",\"path\":[\"input\",\"body\",\"amount\"]}," ++
+        "\"right\":{\"type\":\"value\",\"value\":100}}]}";
+    try testing.expectEqual(Class.prefix_only, try classify(every_policy));
+    const negated = "{\"type\":\"not\",\"expr\":" ++ policy ++ "}";
+    try testing.expectEqual(Class.prefix_only, try classify(negated));
 }
 test "analyze: bare input reaches the body -> full_tree" {
     const iterated =
