@@ -99,6 +99,11 @@ class Refusals(unittest.TestCase):
         # Dropping `k` would leave it a bare ref into the input.
         self.assertRefused('allow if every k, v in input.m { k != "x" }', "key binding")
 
+    def test_head_value_naming_a_body_binding_is_refused(self):
+        # zopa evaluates the value outside the body's scope, so `y`
+        # would resolve against the input root: never what OPA returns.
+        self.assertRefused("allow := y if {\n\ty := input.q\n}", "returns body binding `y`")
+
     def test_unnamed_operator_is_described(self):
         # The key-value form of `in` reaches OPA's AST as
         # internal.member_3 and has no bare name; reporting an empty one
