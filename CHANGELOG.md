@@ -4,6 +4,18 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-31
+
+One feature and four converter holes closed, two of them fail-opens.
+
+**Rego reach**: standalone `some x in xs` converts, and so does a multi-statement `every` body. To hold them, a `some` / `every` `body` may now be a statement list, which is additive: existing ASTs build and evaluate as before.
+
+**Upgrade notes -- `rego2ast.py` refuses policies it used to convert.** A variable inside a ref (`input.xs[i]`, `input.xs[_]`), a reference to another rule or to `data`, a name used before its declaration, and a rule value naming a body binding all converted into ASTs that read the wrong thing from the input, some of them allowing what OPA denies. They now fail to convert. If your pipeline hits one, the AST it was producing did not mean what the Rego says. `zig build test-coverage` stays at 37/52: two constructs added, two dropped that were counted but never evaluated correctly.
+
+**Proxy shim**: a policy reaching the body only through bare `input` now refuses an oversized body (403), as one naming `input.body` does.
+
+Release build: **76504 bytes (~75 KB)**, up 680 from v0.6.1, for the list-body evaluator path and the new build-time checks.
+
 ### Added
 
 - **Standalone `some x in xs` converts.** The most common Rego v1 iteration form: `some u in input.users` followed by statements about `u`, all of which must hold for the same element. `rego2ast.py` turns the declaration into a `some` whose body is the rest of the rule body, binding an object's values as Rego does. `some k, v in xs` and `some x` without `in` are still refused.

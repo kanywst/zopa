@@ -17,7 +17,7 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 [authzen]: https://openid.net/specs/authorization-api-1_0.html
 [pw]: https://github.com/proxy-wasm/spec
 
-## Unreleased
+## Done in v0.7.0
 
 - **Standalone `some x in xs`.** The most common Rego v1 iteration form converts: the declaration becomes a `some` whose body is the rest of the rule body. To hold it, `some` / `every` bodies accept a statement list, which also lets `every x in xs { a; b }` convert. Two converter bugs found on the way: a variable inside a ref (`input.xs[i]`, `input.xs[_]`) was read as a literal key -- a fail-open -- and a rule value naming a body binding converted into a ref that could never resolve. Two more surfaced in review, both reading a value from the input that OPA reads from elsewhere: a reference to another rule or to `data`, and `every v in input` escaping the truncated-body check. `zig build test-coverage` stays at 37/52: `some ... in` and multi-statement `every` were added, and `input.xs[_]` and `data.x` were dropped because they never evaluated correctly.
 
