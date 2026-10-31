@@ -144,9 +144,42 @@ def walk_rule(rule: dict[str, Any]) -> dict[str, Any]:
 
     head_val = head.get("value")
     if head_val is not None and not _is_literal_true(head_val):
+        # `allow := y if { y := input.q }` reads `y` from the body. zopa
+        # evaluates a rule's value outside the body's scope, so the ref
+        # would resolve against the input root instead -- undefined on
+        # every request, a rule that never yields what OPA yields.
+        bound = sorted(_body_bindings(body) & _var_names(head_val))
+        if bound:
+            raise Unsupported(
+                f"rule `{name}` returns body binding `{bound[0]}`: "
+                "zopa evaluates the rule value outside the body's scope"
+            )
         out["value"] = walk_term_as_value(head_val)
 
     return out
+
+
+def _body_bindings(body: list[dict[str, Any]]) -> set[str]:
+    """Names a rule body binds at its own scope, as zopa AST."""
+    names: set[str] = set()
+    for expr in body:
+        if expr.get("type") == "assign":
+            names.add(expr["var"])
+    return names
+
+
+def _var_names(term: Any) -> set[str]:
+    """Every variable an OPA term mentions, at any depth."""
+    names: set[str] = set()
+    if isinstance(term, dict):
+        if term.get("type") == "var" and isinstance(term.get("value"), str):
+            names.add(term["value"])
+        for v in term.values():
+            names |= _var_names(v)
+    elif isinstance(term, list):
+        for v in term:
+            names |= _var_names(v)
+    return names
 
 
 def _is_literal_true(term: dict[str, Any]) -> bool:

@@ -4,6 +4,10 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+### Fixed
+
+- **`rego2ast.py` converted a rule whose value names a body binding.** `allow := y if { y := input.q }` became a rule returning `ref ["y"]`, but zopa evaluates a rule's value outside the body's scope, so the ref resolved against the input root and the rule never returned what OPA returns. It failed closed (the value was undefined, so the rule denied), but it converted fine and meant something else. The converter now refuses it.
+
 ## [0.6.1] - 2026-10-06
 
 A patch for one more parser disagreement, and the move to Zig 0.17.0.
