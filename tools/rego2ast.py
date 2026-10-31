@@ -122,23 +122,7 @@ def walk_rule(rule: dict[str, Any]) -> dict[str, Any]:
 
     # Regular rule. Body is the list of expressions; head value (if
     # not the implicit `true`) becomes the rule's `value`.
-    body = [walk_expr(e) for e in rule.get("body", [])]
-
-    # Rego's `:=` is single-assignment per scope -- OPA refuses
-    # `x := 1; x := 2` with `rego_compile_error: var x assigned above`.
-    # This pipeline runs `opa parse`, not `opa check`, so that rejection
-    # never fires; without this the converter would emit an AST for a
-    # policy real OPA will not load.
-    seen: set[str] = set()
-    for expr in body:
-        if expr.get("type") != "assign":
-            continue
-        if expr["var"] in seen:
-            raise Unsupported(
-                f"`{expr['var']}` is assigned twice in one body; "
-                "Rego allows a name to be bound once per scope"
-            )
-        seen.add(expr["var"])
+    body = walk_body(rule.get("body", []))
 
     out["body"] = body
 
@@ -160,12 +144,136 @@ def walk_rule(rule: dict[str, Any]) -> dict[str, Any]:
 
 
 def _body_bindings(body: list[dict[str, Any]]) -> set[str]:
-    """Names a rule body binds at its own scope, as zopa AST."""
+    """Names a rule body binds at its own scope, as zopa AST.
+
+    A standalone `some` nests the rest of the body inside itself, but
+    in Rego those statements are still the rule's own scope, so the walk
+    follows list-bodied `some`s down. `every` is a scope of its own and
+    is not followed. The converter emits no other list-bodied `some`.
+    """
     names: set[str] = set()
     for expr in body:
         if expr.get("type") == "assign":
             names.add(expr["var"])
+        elif expr.get("type") == "some" and isinstance(expr.get("body"), list):
+            names.add(expr["var"])
+            names |= _body_bindings(expr["body"])
     return names
+
+
+def walk_body(exprs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert one Rego body -- a rule's, or an `every`'s -- into a
+    zopa statement list.
+
+    A standalone `some x in xs` binds `x` for every statement after it.
+    zopa's `some` owns the body it binds over, so the declaration becomes
+    a `some` whose body is the rest of this one. Statements before it
+    stay outside, and their assignments stay visible inside: the
+    evaluator runs the `some` within the frames they push.
+    """
+    # Rego's `:=` and `some` share one namespace per scope: `opa check`
+    # refuses `x := 1; x := 2` as "var x assigned above" and a repeated
+    # or reassigned `some` name as "var x declared above". This pipeline
+    # runs `opa parse`, which accepts both, and once a `some` nests the
+    # rest of the body the module's own per-list check cannot see across
+    # the nesting -- so the converter checks the flat statement list.
+    seen: dict[str, str] = {}
+
+    def claim(name: str, how: str) -> None:
+        if re.fullmatch(r"\$\d+", name):
+            return  # a wildcard, `_`, which OPA renames and nothing can read
+        if name in seen:
+            if how == "assign" and seen[name] == "assign":
+                raise Unsupported(
+                    f"`{name}` is assigned twice in one body; "
+                    "Rego allows a name to be bound once per scope"
+                )
+            raise Unsupported(
+                f"`{name}` is declared twice in one body; "
+                "Rego allows a name to be bound once per scope"
+            )
+        seen[name] = how
+
+    for expr in exprs:
+        for name, how in _rego_bindings(expr):
+            claim(name, how)
+
+    out: list[dict[str, Any]] = []
+    for i, expr in enumerate(exprs):
+        terms = expr.get("terms")
+        if isinstance(terms, dict) and "symbols" in terms:
+            if expr.get("with"):
+                raise Unsupported(
+                    "`with` modifier not supported: it would change the input the body sees"
+                )
+            var, source = _some_in_declaration(terms["symbols"])
+            out.append({
+                "type": "some",
+                "var": var,
+                "source": source,
+                # Rego binds an object's *values* here, as for `every`.
+                "kind": "values",
+                "body": walk_body(exprs[i + 1 :]),
+            })
+            return out
+        out.append(walk_expr(expr))
+    return out
+
+
+def _rego_bindings(expr: dict[str, Any]) -> list[tuple[str, str]]:
+    """Names a Rego statement binds at its own scope: an assignment's
+    target, or the names a `some` declares. `every` binds inside a scope
+    of its own. Shapes `walk_body` goes on to refuse yield nothing here;
+    the refusal comes from the walk with a better message."""
+    terms = expr.get("terms")
+    if isinstance(terms, dict) and "symbols" in terms:
+        names: list[tuple[str, str]] = []
+        for decl in terms["symbols"]:
+            if decl.get("type") == "var":
+                names.append((decl["value"], "some"))
+            elif decl.get("type") == "call":
+                names.extend(
+                    (a["value"], "some") for a in decl["value"][1:-1] if a.get("type") == "var"
+                )
+        return names
+    if (
+        isinstance(terms, list)
+        and len(terms) == 3
+        and _flat_var_name(terms[0]) == "assign"
+        and terms[1].get("type") == "var"
+    ):
+        return [(terms[1]["value"], "assign")]
+    return []
+
+
+def _some_in_declaration(symbols: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+    """`some x in xs` -> (`x`, zopa source). The other declaration
+    shapes stay refused, each for a reason that would otherwise convert
+    into a different policy."""
+    if len(symbols) != 1:
+        raise Unsupported("`some` declaring several names at once not supported")
+    decl = symbols[0]
+    if decl.get("type") != "call":
+        # `some x` with no domain: the name is bound by unification with
+        # whatever later refs it appears in, e.g. `input.xs[x]`. zopa has
+        # no unification, and the bare var would resolve against the input.
+        raise Unsupported(
+            "`some x` without `in` not supported: zopa binds names by iteration, not unification"
+        )
+    op = _describe_ref(decl["value"][0])
+    args = decl["value"][1:]
+    if op == "internal.member_3":
+        raise Unsupported(
+            "`some k, v in xs` not supported: zopa binds one variable per iteration"
+        )
+    if op != "internal.member_2" or len(args) != 2:
+        raise Unsupported(f"unrecognized `some` declaration: {op}")
+    target = args[0]
+    if target.get("type") != "var":
+        raise Unsupported(
+            "`some` target must be a plain variable; destructuring is not supported"
+        )
+    return target["value"], walk_term(args[1])
 
 
 def _var_names(term: Any) -> set[str]:
@@ -221,19 +329,14 @@ def walk_expr_inner(terms: Any) -> dict[str, Any]:
     if isinstance(terms, dict):
         if "domain" in terms:
             return walk_every(terms)
-        # A bare `some x in xs` declares a binding for the expressions
-        # that follow it in the same body. zopa's `some` is different:
-        # it owns the body it binds over. Expressing one as the other
-        # means restructuring the rule, which the converter does not do.
-        # Without this the dict falls through to `walk_term`, which
-        # reaches for a "type" key that a symbols declaration does not
-        # have and dies with a KeyError -- a traceback where the runner
-        # expects either an AST or a clean `Unsupported`.
+        # A `some` declaration is a body statement, which `walk_body`
+        # converts before it gets here. Reaching this means it sat
+        # somewhere without a body to scope over. Without the check the
+        # dict falls through to `walk_term`, which reaches for a "type"
+        # key a declaration does not have and dies with a KeyError -- a
+        # traceback where the runner expects an AST or a clean refusal.
         if "symbols" in terms:
-            raise Unsupported(
-                "standalone `some ... in` not supported: zopa's `some` binds over its own "
-                "body, so the declaration cannot be lifted out of it"
-            )
+            raise Unsupported("`some` declaration outside a body")
         # Single-term form. In body position, evaluate the term and
         # treat truthiness directly. zopa's evaluator handles this:
         # a bare `value` / `ref` resolves and is checked against
@@ -304,8 +407,14 @@ def walk_call_form(terms: list[dict[str, Any]]) -> dict[str, Any]:
 
 def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
     domain = walk_term(terms["domain"])
-    body_exprs = [walk_expr(e) for e in terms.get("body", [])]
-    body_inner = body_exprs[0] if len(body_exprs) == 1 else _and_chain(body_exprs)
+    body_exprs = walk_body(terms.get("body", []))
+    # One plain expression keeps the single-expression form; anything
+    # else -- several statements, or a lone binding the object form
+    # would refuse -- goes out as a statement list.
+    if len(body_exprs) == 1 and body_exprs[0].get("type") != "assign":
+        body_inner: Any = body_exprs[0]
+    else:
+        body_inner = body_exprs
 
     value = terms.get("value")
     if value is None or value.get("type") != "var":
@@ -334,13 +443,6 @@ def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
         "kind": "values",
     }
     return out
-
-
-def _and_chain(exprs: list[dict[str, Any]]) -> dict[str, Any]:
-    # zopa has no native `and` node; bodies are implicit AND. Inside
-    # an iterator, multiple body statements collapse into a synthetic
-    # nested rule. v1: only support single-expression every bodies.
-    raise Unsupported("multi-expression every body not supported in v1")
 
 
 # ---------------------------------------------------------------------------

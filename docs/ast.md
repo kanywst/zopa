@@ -217,11 +217,15 @@ Used as the `source` of a `some` / `every`, or as a literal compared for equalit
   "var":  "x",
   "kind": "keys" | "values",
   "source": <Expr>,
-  "body":   <Expr>
+  "body":   <Expr> | [ <Expr>, ... ]
 }
 ```
 
 Resolves `source` to an array, set, or object, then evaluates `body` once for each element with `x` bound. True iff any iteration's body holds. An empty source yields `false`.
+
+`body` is one expression or a list of them. A list is a conjunction evaluated like a rule body: `assign` works inside it, its binding lasts for the rest of the list within one iteration, and binding a name twice in the same list is rejected when the AST is built. An empty list holds, so `some` with `"body": []` is true iff the source has an element. A lone `assign` as the single-expression form is rejected (`error.AssignOutsideBody`): it has nothing to scope over.
+
+`tools/rego2ast.py` converts Rego's standalone `some x in xs` into this node with a list body holding every statement after the declaration, and `"kind": "values"`, since Rego binds an object's values. Statements before the declaration stay outside, and their bindings remain visible inside. `some k, v in xs` and `some x` without `in` are refused.
 
 `kind` only matters when `source` resolves to a JSON object. With `"keys"` (the default), `x` binds to each key as a string; with `"values"`, to each member's value. Arrays and sets ignore `kind` and bind elements directly.
 
@@ -233,7 +237,7 @@ Resolves `source` to an array, set, or object, then evaluates `body` once for ea
   "var":  "x",
   "kind": "keys" | "values",
   "source": <Expr>,
-  "body":   <Expr>
+  "body":   <Expr> | [ <Expr>, ... ]
 }
 ```
 
@@ -249,7 +253,7 @@ Rego's `left in right`. True when `right` is an array or set holding an element 
 
 Rego spells `in` as a call, so its operands behave like a call's arguments. An undefined operand fails the body, and under `not` it is lifted out of the negation as described for [`not`](#not----negation): `not input.user in input.banned` denies when either field is missing. In value position the node resolves to a boolean.
 
-`tools/rego2ast.py` converts `x in xs` (OPA's `internal.member_2`). The key-value form `k, v in xs` and a standalone `some x in xs` declaration are not converted.
+`tools/rego2ast.py` converts `x in xs` (OPA's `internal.member_2`). The key-value form `k, v in xs` is not converted. A standalone `some x in xs` declaration is a different construct: see [`some`](#some----existential).
 
 ### `call` -- builtin function
 

@@ -60,10 +60,34 @@ class Refusals(unittest.TestCase):
     def test_with_modifier_says_why(self):
         self.assertRefused("allow if input.x == 1 with input.y as 2", "`with` modifier")
 
-    def test_standalone_some_says_why(self):
+    def test_some_with_a_key_binding_is_refused(self):
+        self.assertRefused("allow if {\n\tsome k, v in input.m\n\tv == 1\n}", "`some k, v in xs`")
+
+    def test_some_without_in_is_refused(self):
+        # Bound by unification with `input.xs[x]`; zopa has none, and the
+        # bare name would resolve against the input.
+        self.assertRefused("allow if {\n\tsome x\n\tinput.xs[x] == 1\n}", "without `in`")
+
+    def test_some_name_bound_twice_in_one_body_is_refused(self):
+        # `opa check`: var x declared above. Each of these nests the
+        # later statements inside a `some`, out of reach of the module's
+        # per-list check, so the converter has to catch them.
+        for body in (
+            "some x in input.xs\n\tsome x in input.ys",
+            "x := 1\n\tsome x in input.xs",
+            "some x in input.xs\n\tx := 1",
+            "x := 1\n\tsome y in input.ys\n\tsome x in input.zs",
+        ):
+            with self.subTest(body=body):
+                self.assertRefused(f"allow if {{\n\t{body}\n}}", "`x` is declared twice")
+
+    def test_reassignment_after_a_some_is_refused(self):
         self.assertRefused(
-            "allow if {\n\tsome x in input.xs\n\tx == 1\n}", "standalone `some ... in`",
+            "allow if {\n\tx := 1\n\tsome y in input.ys\n\tx := 2\n}", "assigned twice",
         )
+
+    def test_head_value_naming_a_some_binding_is_refused(self):
+        self.assertRefused("allow := x if {\n\tsome x in input.xs\n}", "returns body binding `x`")
 
     def test_else_chain_says_the_branch_would_be_dropped(self):
         self.assertRefused(
@@ -192,6 +216,28 @@ class Conversions(unittest.TestCase):
         self.assertEqual(expr["type"], "not")
         self.assertEqual(expr["expr"]["type"], "in")
         self.assertEqual(expr["expr"]["right"], {"type": "set", "items": ["a", "b"]})
+
+    def test_standalone_some_scopes_over_the_rest_of_the_body(self):
+        ast = self.assertConverts(
+            "allow if {\n\ta := input.a\n\tsome u in input.users\n\tu.role == a\n\tu.active\n}"
+        )
+        body = ast["rules"][0]["body"]
+        self.assertEqual([e["type"] for e in body], ["assign", "some"])
+        some = body[1]
+        self.assertEqual(some["var"], "u")
+        # Rego binds an object's values, as for `every`.
+        self.assertEqual(some["kind"], "values")
+        self.assertEqual([e["type"] for e in some["body"]], ["compare", "ref"])
+
+    def test_standalone_some_with_nothing_after_it(self):
+        ast = self.assertConverts("allow if {\n\tsome _ in input.xs\n}")
+        self.assertEqual(ast["rules"][0]["body"][0]["body"], [])
+
+    def test_every_with_a_multi_statement_body(self):
+        ast = self.assertConverts("allow if every x in input.xs {\n\tn := x.n\n\tn > 0\n}")
+        self.assertEqual(
+            [e["type"] for e in ast["rules"][0]["body"][0]["body"]], ["assign", "compare"],
+        )
 
     def test_every_with_a_single_expression_body(self):
         ast = self.assertConverts("allow if every x in input.xs { x == 1 }")

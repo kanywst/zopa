@@ -101,12 +101,11 @@ Every row is reproducible from a clean checkout, but the machine is a developer 
 
 ## Rego coverage
 
-`tools/rego2ast.py` converts `opa parse --format json` output into zopa's AST, and refuses -- loudly -- anything it cannot express. `zig build test-coverage` walks a corpus of one-construct policies and records what converts, so this is a table rather than an adjective. Currently **37 of 52**. What is missing:
+`tools/rego2ast.py` converts `opa parse --format json` output into zopa's AST, and refuses -- loudly -- anything it cannot express. `zig build test-coverage` walks a corpus of one-construct policies and records what converts, so this is a table rather than an adjective. Currently **38 of 52**. What is missing:
 
 | Not supported | Why it matters |
 | --- | --- |
-| standalone `some x in xs` | zopa's `some` binds over its own body, so the declaration cannot be lifted out of it. |
-| `every x in xs { a; b }` multi-expression body | Single-expression bodies convert. |
+| `some k, v in xs`, `some x` without `in`, wildcard refs (`input.xs[_]`) | zopa binds one name per iteration and has no unification. `some x in xs` converts. |
 | `sprintf`, `lower`, `split`, and every builtin outside the four | Only `startswith`, `endswith`, `contains`, `count` exist. |
 | array and set comprehensions | No comprehension support at all. |
 | destructuring assignment (`[a, b] := ...`) | Bind the whole value and index into it. |
@@ -228,7 +227,7 @@ The AST is Rego-shaped JSON. Full reference: [`docs/ast.md`](docs/ast.md).
 
 Supported nodes: `value`, `ref`, `compare` (`eq`/`neq`/`lt`/`lte`/`gt`/`gte`), `not`, `set`, `some`, `every`, `call`, `module`, `modules`, `rule`. The `type` field accepts shorthand for compare ops (`{"type": "eq", ...}` is the same as `{"type": "compare", "op": "eq", ...}`).
 
-Builtin functions surfaced via `call`: `startswith`, `endswith`, `contains`, `count`. Object iteration supports `kind: "keys"` (default) or `"values"` on `some` / `every`. Multi-package bundles use `{"type": "modules", "modules": [...]}` and dispatch via `evaluate_addressed(input, ast, package, rule)`.
+Builtin functions surfaced via `call`: `startswith`, `endswith`, `contains`, `count`. Object iteration supports `kind: "keys"` (default) or `"values"` on `some` / `every`, and their `body` may be a statement list. Multi-package bundles use `{"type": "modules", "modules": [...]}` and dispatch via `evaluate_addressed(input, ast, package, rule)`.
 
 ## Architecture
 
