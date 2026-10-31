@@ -1,0 +1,148 @@
+# Envoy bootstrap for the bare-`input` truncation check.
+#
+# Placeholders substituted by examples/envoy/run.sh:
+#   __WASM_PATH__     absolute path to zig-out/bin/zopa.wasm
+#   __PORT__          data plane listener port
+#   __BACKEND_PORT__  loopback upstream port
+#   __ADMIN_PORT__    admin port (used to detect readiness)
+#   __RUNTIME__       wasm runtime id (wamr locally, v8 in CI)
+#
+# The policy's only route to the body is the whole input document:
+#
+#   allow_body := false if { some v in input; contains(v, "BLOCKED") }
+#
+# It never names `body` or `body_raw`, yet it reads both. A body-deps
+# walk that classified bare `input` as touching nothing let the shim
+# evaluate a truncated prefix, so a marker past the 64 KiB cap went
+# unseen and the request was allowed. The phases scenario cannot catch
+# that: its other `allow_body` rules already read the body, so an
+# oversized request is refused whatever this one is classified as.
+#
+# Same two-listener layout as envoy-phases.yaml, for the same reason: a
+# `direct_response` route is answered before the body is read.
+
+admin:
+  address:
+    socket_address: { address: 127.0.0.1, port_value: __ADMIN_PORT__ }
+
+static_resources:
+  listeners:
+    - name: ingress_listener
+      address:
+        socket_address: { address: 127.0.0.1, port_value: __PORT__ }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                codec_type: AUTO
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: loopback_backend }
+                http_filters:
+                  - name: envoy.filters.http.wasm
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+                      config:
+                        name: zopa
+                        root_id: zopa
+                        configuration:
+                          "@type": type.googleapis.com/google.protobuf.StringValue
+                          value: |
+                            {
+                              "type": "module",
+                              "rules": [
+                                {
+                                  "type": "rule",
+                                  "name": "allow",
+                                  "body": [{ "type": "value", "value": true }]
+                                },
+                                {
+                                  "type": "rule",
+                                  "name": "allow_body",
+                                  "default": true,
+                                  "value": { "type": "value", "value": true }
+                                },
+                                {
+                                  "type": "rule",
+                                  "name": "allow_body",
+                                  "body": [
+                                    {
+                                      "type": "some",
+                                      "var": "v",
+                                      "kind": "values",
+                                      "source": { "type": "ref", "path": ["input"] },
+                                      "body": [
+                                        {
+                                          "type": "call",
+                                          "name": "contains",
+                                          "args": [
+                                            { "type": "ref", "path": ["v"] },
+                                            { "type": "value", "value": "BLOCKED" }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ],
+                                  "value": { "type": "value", "value": false }
+                                }
+                              ]
+                            }
+                        vm_config:
+                          runtime: __RUNTIME__
+                          code:
+                            local:
+                              filename: __WASM_PATH__
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+    - name: backend_listener
+      address:
+        socket_address: { address: 127.0.0.1, port_value: __BACKEND_PORT__ }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: backend_http
+                codec_type: AUTO
+                route_config:
+                  name: backend_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/teapot" }
+                          direct_response:
+                            status: 418
+                            body:
+                              inline_string: "teapot\n"
+                        - match: { prefix: "/" }
+                          direct_response:
+                            status: 200
+                            body:
+                              inline_string: "ok\n"
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: loopback_backend
+      connect_timeout: 1s
+      type: STATIC
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: loopback_backend
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: 127.0.0.1, port_value: __BACKEND_PORT__ }
