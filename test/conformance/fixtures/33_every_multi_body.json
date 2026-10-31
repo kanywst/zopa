@@ -1,0 +1,64 @@
+{
+  "name": "every_multi_body",
+  "note": "An `every` body with several statements is a conjunction per element, and an assignment inside it is scoped to that element. An empty source holds vacuously; a missing one does not.",
+  "rego": "package authz\n\nimport rego.v1\n\ndefault allow := false\n\nallow if {\n\tevery x in input.xs {\n\t\tn := x.n\n\t\tn > 0\n\t\tn < 10\n\t}\n}\n",
+  "cases": [
+    {
+      "input": {
+        "xs": [
+          {
+            "n": 1
+          },
+          {
+            "n": 9
+          }
+        ]
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "xs": [
+          {
+            "n": 1
+          },
+          {
+            "n": 10
+          }
+        ]
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "xs": [
+          {
+            "n": 1
+          },
+          {}
+        ]
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "xs": []
+      },
+      "expected": 1
+    },
+    {
+      "input": {},
+      "expected": 0
+    },
+    {
+      "input": {
+        "xs": {
+          "a": {
+            "n": 5
+          }
+        }
+      },
+      "expected": 1
+    }
+  ]
+}

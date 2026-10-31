@@ -17,6 +17,10 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 [authzen]: https://openid.net/specs/authorization-api-1_0.html
 [pw]: https://github.com/proxy-wasm/spec
 
+## Unreleased
+
+- **Standalone `some x in xs`.** The most common Rego v1 iteration form converts: the declaration becomes a `some` whose body is the rest of the rule body. To hold it, `some` / `every` bodies accept a statement list, which also lets `every x in xs { a; b }` convert. Two converter bugs found on the way: a variable inside a ref (`input.xs[i]`, `input.xs[_]`) was read as a literal key -- a fail-open -- and a rule value naming a body binding converted into a ref that could never resolve. `zig build test-coverage` goes from 37/52 to 38/52 (36 after the ref fix, which uncounted `input.xs[_]`; it never iterated).
+
 ## Done in v0.6.1
 
 - **Zig 0.17.0**, and a parse error for number literals past `f64`'s range (a Go backend rejects them). Numbers compare as `f64` by design, documented against OPA's exact decimals.

@@ -4,6 +4,11 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+### Added
+
+- **Standalone `some x in xs` converts.** The most common Rego v1 iteration form: `some u in input.users` followed by statements about `u`, all of which must hold for the same element. `rego2ast.py` turns the declaration into a `some` whose body is the rest of the rule body, binding an object's values as Rego does. `some k, v in xs` and `some x` without `in` are still refused.
+- **`some` / `every` bodies can be a statement list.** `"body": [<Expr>, ...]` is a conjunction evaluated like a rule body, so `:=` works inside it and its binding is scoped to one element. The single-expression form is unchanged, including refusing a lone assignment. This is what lets a standalone `some` hold the rest of a body, and it lifts the converter's single-expression limit on `every`, so `every x in xs { a; b }` converts too. `zig build test-coverage` goes from 36/52 to 38/52.
+
 ### Fixed
 
 - **`rego2ast.py` turned a variable inside a ref into a literal key.** `input.xs[i]` converted to the path `["input", "xs", "i"]`, a lookup of the key `"i"` rather than of the value bound to `i`. `allow if every i in input.idx { input.xs[i] == 1 }` allowed `{"idx": [0], "xs": {"i": 1}}`, which `opa eval` denies. A variable anywhere past the head of a ref is now refused. `input.xs[_]` was the same bug -- OPA renames `_` to `$0`, so it looked up the key `"$0"` and never iterated -- and is refused too, so `zig build test-coverage` drops from 37/52 to 36/52: the construct was counted but never worked.

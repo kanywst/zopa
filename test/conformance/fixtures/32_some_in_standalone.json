@@ -1,0 +1,109 @@
+{
+  "name": "some_in_standalone",
+  "note": "A standalone `some x in xs` binds `x` for every statement after it, so they must hold for the same element: an inactive admin plus an active developer is not an active admin. Object sources bind values. An undefined or non-collection source fails the body. Assignments before the declaration stay visible inside it, and assignments after it are per element.",
+  "rego": "package authz\n\nimport rego.v1\n\ndefault allow := false\n\nallow if {\n\tsome u in input.users\n\tu.role == \"admin\"\n\tu.active\n}\n\nallow if {\n\twant := input.want\n\tsome t in input.tags\n\tn := t.name\n\tn == want\n}\n",
+  "cases": [
+    {
+      "input": {
+        "users": [
+          {
+            "role": "admin",
+            "active": true
+          }
+        ]
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "users": [
+          {
+            "role": "admin",
+            "active": false
+          },
+          {
+            "role": "dev",
+            "active": true
+          }
+        ]
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "users": {
+          "a": {
+            "role": "admin",
+            "active": true
+          }
+        }
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "users": {
+          "admin": {
+            "role": "dev",
+            "active": true
+          }
+        }
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "users": "admin"
+      },
+      "expected": 0
+    },
+    {
+      "input": {},
+      "expected": 0
+    },
+    {
+      "input": {
+        "want": "x",
+        "tags": [
+          {
+            "name": "y"
+          },
+          {
+            "name": "x"
+          }
+        ]
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "want": "x",
+        "tags": [
+          {
+            "name": "y"
+          }
+        ]
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "tags": [
+          {}
+        ]
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "want": null,
+        "tags": [
+          {
+            "name": null
+          }
+        ]
+      },
+      "expected": 1
+    }
+  ]
+}
