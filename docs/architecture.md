@@ -72,7 +72,7 @@ Bodies are an implicit AND. Every expression in the body must hold.
 
 `compare` resolves both sides to `Value` via `resolveValue`, which also handles nested `not` and `compare` (folded back to `boolean`). Nested iterators (`some` / `every` inside a body or as a value) follow the same path.
 
-Variable bindings introduced by `some` / `every` live in a stack-allocated `Scope` linked list. Each iterator pushes a frame for the duration of one body evaluation; refs walk the chain before falling back to the input root.
+Variable bindings introduced by `some` / `every` live in a stack-allocated `Scope` linked list. Each iterator pushes a frame for the duration of one body evaluation; refs walk the chain before falling back to the input root. `assign` pushes one too, covering the statements after it, which is why a body -- a rule's, or an iterator's list body -- is evaluated recursively rather than as a flat loop.
 
 Scope is local to the iterator. Bindings introduced inside a rule body are not visible from that rule's `value` expression -- the value is resolved with a fresh, empty scope. A policy that needs to reference a body-bound variable from `value` must move the computation inside the body or restructure to compute the value inline. Lifting body bindings into the value position is on the roadmap.
 

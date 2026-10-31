@@ -338,6 +338,23 @@ check('every: null source does not hold -> deny', decide({ tags: null }, everyAd
   check('not every: missing source fails the body -> deny', decide({}, { type: 'not', expr: everyValues }), 0);
   const someAny = { type: 'some', var: 'v', source: { type: 'ref', path: ['input', 'attrs'] }, body: { type: 'value', value: true } };
   check('some: missing source -> deny', decide({}, someAny), 0);
+  // A list body is a conjunction over the *same* element -- what a
+  // standalone Rego `some u in xs` converts into.
+  const someActiveAdmin = {
+    type: 'some', var: 'u', source: { type: 'ref', path: ['input', 'users'] },
+    body: [
+      { type: 'eq', left: { type: 'ref', path: ['u', 'role'] }, right: { type: 'value', value: 'admin' } },
+      { type: 'ref', path: ['u', 'active'] },
+    ],
+  };
+  check('some list body: one element satisfies all -> allow',
+    decide({ users: [{ role: 'admin', active: true }] }, someActiveAdmin), 1);
+  check('some list body: split across elements -> deny',
+    decide({ users: [{ role: 'admin', active: false }, { role: 'dev', active: true }] }, someActiveAdmin), 0);
+  check('some list body: empty list holds per element -> allow',
+    decide({ attrs: [0] }, { ...someAny, body: [] }), 1);
+  check('some: assign as the sole object body -> -1',
+    decide({ attrs: [0] }, { ...someAny, body: { type: 'assign', var: 'x', value: { type: 'value', value: 1 } } }), -1);
   check('some: null source -> deny', decide({ attrs: null }, someAny), 0);
   check('some: scalar source -> deny', decide({ attrs: 'x' }, someAny), 0);
   check('not some: missing source fails the body -> deny', decide({}, { type: 'not', expr: someAny }), 0);
