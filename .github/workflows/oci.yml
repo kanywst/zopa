@@ -82,6 +82,20 @@ jobs:
         run: |
           set -euo pipefail
           IFS=',' read -ra refs <<<"$TAGS"
+          # The public Rekor log occasionally rejects or drops the upload
+          # ("POST .../log/entries giving up after 2 attempt(s)"), which left
+          # an already-pushed :edge unsigned on 2026-11-07. Retry with a fresh
+          # keyless signature instead of failing the run on one bad request.
           for ref in "${refs[@]}"; do
-            cosign sign --yes "${ref}@${DIGEST}"
+            for attempt in 1 2 3 4; do
+              if cosign sign --yes "${ref}@${DIGEST}"; then
+                continue 2
+              fi
+              if [ "${attempt}" -lt 4 ]; then
+                echo "cosign sign failed for ${ref} (attempt ${attempt}), retrying in $((attempt * 30))s"
+                sleep $((attempt * 30))
+              fi
+            done
+            echo "::error::cosign sign failed for ${ref} after 4 attempts"
+            exit 1
           done
