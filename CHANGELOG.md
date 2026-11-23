@@ -4,6 +4,16 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-24
+
+One feature: Rego's key-value iteration converts.
+
+**Rego reach**: `some k, v in xs` and `every k, v in xs` convert, on an optional `key` field on `some` / `every`. Additive: an AST without `key` builds and evaluates as before. `zig build test-coverage` goes from 37/52 to 39/54.
+
+**Upgrade notes**: a hand-built AST naming a `some` / `every` variable or an `assign` target `input` no longer builds (`error.ShadowsInput`, -1). Such a binding could never be read. `rego2ast.py` never emitted one.
+
+Release build: **77225 bytes (~75 KB)**, up 721 from v0.7.0, for the key frame and the build-time checks.
+
 ### Added
 
 - **`some k, v in xs` and `every k, v in xs` convert.** `some` / `every` take an optional `"key"` naming a second binding for each element's key, as OPA binds it: an array's index (a number), an object's key, and a set element itself. With `key`, `var` binds the value and `kind` defaults to `"values"`; `"kind": "keys"` beside it, a `key` equal to `var`, a non-string `key`, or a list body reassigning it are rejected when the AST is built. `rego2ast.py` emits it for both forms, drops a wildcard key, and still refuses a constant key (`some "a", v in xs`), which is a match rather than a binding. Additive: an AST without `key` builds and evaluates as before. `zig build test-coverage` goes from 37/52 to 39/54. Fixture `34_some_every_key_value` is checked against `opa eval`.
@@ -306,7 +316,9 @@ First tagged release. Public surface (export names, AST schema, callback semanti
 
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
-[Unreleased]: https://github.com/kanywst/zopa/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/kanywst/zopa/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/kanywst/zopa/releases/tag/v0.8.0
+[0.7.0]: https://github.com/kanywst/zopa/releases/tag/v0.7.0
 [0.6.1]: https://github.com/kanywst/zopa/releases/tag/v0.6.1
 [0.6.0]: https://github.com/kanywst/zopa/releases/tag/v0.6.0
 [0.5.0]: https://github.com/kanywst/zopa/releases/tag/v0.5.0

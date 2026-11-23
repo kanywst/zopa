@@ -17,6 +17,10 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 [authzen]: https://openid.net/specs/authorization-api-1_0.html
 [pw]: https://github.com/proxy-wasm/spec
 
+## Done in v0.8.0
+
+- **`some k, v in xs` and `every k, v in xs`.** `some` / `every` take an optional `key` binding the element's key as OPA does: an array's index, an object's key, a set element itself. This is the need goal 1 of `docs/proposals/composite-ref-iteration.md` named `pairs`, met without a tuple the body would have to index into. A binding named `input` is now rejected when the AST is built, as OPA rejects it. `zig build test-coverage` goes from 37/52 to 39/54.
+
 ## Done in v0.7.0
 
 - **Standalone `some x in xs`.** The most common Rego v1 iteration form converts: the declaration becomes a `some` whose body is the rest of the rule body. To hold it, `some` / `every` bodies accept a statement list, which also lets `every x in xs { a; b }` convert. Two converter bugs found on the way: a variable inside a ref (`input.xs[i]`, `input.xs[_]`) was read as a literal key -- a fail-open -- and a rule value naming a body binding converted into a ref that could never resolve. Two more surfaced in review, both reading a value from the input that OPA reads from elsewhere: a reference to another rule or to `data`, and `every v in input` escaping the truncated-body check. `zig build test-coverage` stays at 37/52: `some ... in` and multi-statement `every` were added, and `input.xs[_]` and `data.x` were dropped because they never evaluated correctly.
@@ -74,7 +78,7 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 ## Near term
 
 - **Streaming evaluation runtime.** Build on the body-deps analyser to skip body buffering when no body refs exist, or short-circuit as soon as referenced prefixes resolve. Design in `docs/proposals/streaming-evaluation.md`.
-- **Conformance corpus expansion.** `zig build test-coverage` now answers "which constructs" (39 of 54 on `main`), so the number exists. What is still missing is breadth: vendor a slice of the OPA upstream test corpus rather than a hand-written probe, and close the constructs the ledger reports as out of reach.
+- **Conformance corpus expansion.** `zig build test-coverage` now answers "which constructs" (39 of 54 as of v0.8.0), so the number exists. What is still missing is breadth: vendor a slice of the OPA upstream test corpus rather than a hand-written probe, and close the constructs the ledger reports as out of reach.
 - **Structured response replacement.** Surface a `json.Value` from the evaluator so a denied `allow_response` rule can return `{status, body, headers}` instead of the fixed 503.
 - **Per-context request snapshot.** Surface `:method` / `:path` / selected headers under `proxy_on_request_body` so body rules can reason about request context too.
 
