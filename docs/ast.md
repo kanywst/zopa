@@ -230,7 +230,7 @@ Resolves `source` to an array, set, or object, then evaluates `body` once for ea
 
 `kind` only matters when `source` resolves to a JSON object. With `"keys"` (the default), `x` binds to each key as a string; with `"values"`, to each member's value. Arrays and sets ignore `kind` and bind elements directly.
 
-`key` is optional and binds a second name to each element's key, as Rego's `some k, v in xs` does: an array's index (a number), an object's key (a string), and for a set the element itself. With `key` present, `var` binds the value, so `kind` defaults to `"values"`; `"kind": "keys"` alongside it is rejected when the AST is built (`error.KindWithKey`), as is a `key` equal to `var` or reassigned in a list body (`error.DuplicateAssignment`) and a non-string `key` (`error.InvalidKey`).
+`key` is optional and binds a second name to each element's key, as Rego's `some k, v in xs` does: an array's index (a number), an object's key (a string), and for a set the element itself. With `key` present, `var` binds the value, so `kind` defaults to `"values"`; `"kind": "keys"` alongside it is rejected when the AST is built (`error.KindWithKey`), as is a `key` equal to `var` or reassigned in a list body (`error.DuplicateAssignment`) and a non-string `key` (`error.InvalidKey`). A `var`, `key` or `assign` target named `input` is rejected too (`error.ShadowsInput`): a ref opening with `input` always reads the input root, so the binding could never be read, and OPA refuses the name as well.
 
 ### `every` -- universal
 

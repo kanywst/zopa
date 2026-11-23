@@ -1043,6 +1043,10 @@ test "iter: a key binding is rejected where it would be ambiguous" {
     const src = "\"source\":{\"type\":\"ref\",\"path\":[\"input\",\"xs\"]},";
     try testing.expectError(error.DuplicateAssignment, evaluate(&arena, "{}", "{\"type\":\"some\",\"var\":\"x\",\"key\":\"x\"," ++ src ++ body));
     try testing.expectError(error.KindWithKey, evaluate(&arena, "{}", "{\"type\":\"some\",\"var\":\"x\",\"key\":\"k\",\"kind\":\"keys\"," ++ src ++ body));
+    try testing.expectError(error.ShadowsInput, evaluate(&arena, "{}", "{\"type\":\"some\",\"var\":\"x\",\"key\":\"input\"," ++ src ++ body));
+    try testing.expectError(error.ShadowsInput, evaluate(&arena, "{}", "{\"type\":\"every\",\"var\":\"input\"," ++ src ++ body));
+    try testing.expectError(error.ShadowsInput, evaluate(&arena, "{}", "{\"type\":\"some\",\"var\":\"x\"," ++ src ++
+        "\"body\":[{\"type\":\"assign\",\"var\":\"input\",\"value\":{\"type\":\"value\",\"value\":1}}]}"));
     try testing.expectError(error.InvalidKey, evaluate(&arena, "{}", "{\"type\":\"some\",\"var\":\"x\",\"key\":1," ++ src ++ body));
     try testing.expectError(error.DuplicateAssignment, evaluate(&arena, "{}", "{\"type\":\"some\",\"var\":\"x\",\"key\":\"k\"," ++ src ++
         "\"body\":[{\"type\":\"assign\",\"var\":\"k\",\"value\":{\"type\":\"value\",\"value\":1}}]}"));

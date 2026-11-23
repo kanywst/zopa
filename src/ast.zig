@@ -345,6 +345,14 @@ fn buildRule(allocator: std.mem.Allocator, node: Value) !Rule {
     };
 }
 
+/// A binding named `input` could never be read: a ref opening with
+/// `input` always resolves against the input root, so the body would
+/// test the request where its author meant the element. OPA refuses the
+/// same name ("variables must not shadow input").
+fn shadowsInput(name: []const u8) bool {
+    return std.mem.eql(u8, name, "input");
+}
+
 /// Build a single expression. See `docs/ast.md` for the accepted JSON
 /// shapes; the compare operator names (`eq`, `neq`, `lt`, ...) are
 /// recognised as shorthand for `{"type":"compare","op":...}`.
@@ -383,6 +391,7 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
         const var_v = try requireField(obj, "var");
         if (var_v != .string) return error.InvalidVar;
         if (var_v.string.len == 0) return error.InvalidVar;
+        if (shadowsInput(var_v.string)) return error.ShadowsInput;
         const value_v = try requireField(obj, "value");
         expr.* = .{ .assign = .{
             .var_name = var_v.string,
@@ -422,6 +431,7 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
         expr.* = .{ .value = .{ .set = items } };
     } else if (std.mem.eql(u8, t, "some") or std.mem.eql(u8, t, "every")) {
         const var_name = try requireString(obj, "var");
+        if (shadowsInput(var_name)) return error.ShadowsInput;
         const source_v = try requireField(obj, "source");
         const body_v = try requireField(obj, "body");
         const key_name: ?[]const u8 = if (json.lookupMember(obj, "key")) |k_v| blk: {
@@ -429,6 +439,7 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
             // `some x, x in xs` would bind one name twice; OPA reads it
             // as "key equals value", zopa would let the inner frame win.
             if (std.mem.eql(u8, k_v.string, var_name)) return error.DuplicateAssignment;
+            if (shadowsInput(k_v.string)) return error.ShadowsInput;
             break :blk k_v.string;
         } else null;
         const kind: Expr.IterKind = if (json.lookupMember(obj, "kind")) |k_v| blk: {
