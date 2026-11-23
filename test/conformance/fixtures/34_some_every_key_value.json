@@ -1,7 +1,7 @@
 {
   "name": "some_every_key_value",
-  "note": "`some k, v in xs` and `every k, v in xs` bind the key as well as the value: an array's index, an object's key. Both must come from the same element, so an owner at index 1 is not an owner at index 0, and a tenant matching one grant's key does not borrow another grant's value. An array's key is a number, so a string tenant never matches an index. `every` over an empty object holds; over a missing or non-object source it does not, and a list source binds indexes, never the string \"secret\". A set is keyed by its members, so `k == v` holds for each. `every i, x` over an array binds the index, so a third element fails `i < 2` whatever it holds.",
-  "rego": "package authz\n\nimport rego.v1\n\ndefault allow := false\n\nallow if {\n\tsome i, u in input.users\n\ti == 0\n\tu.role == \"owner\"\n}\n\nallow if {\n\tsome k, v in input.grants\n\tk == input.tenant\n\tv == \"write\"\n}\n\nallow if {\n\tinput.mode == \"audit\"\n\tevery k, v in input.labels {\n\t\tk != \"secret\"\n\t\tv != \"\"\n\t}\n}\n\nallow if {\n\tinput.mode == \"set\"\n\tsome k, v in {\"a\", \"b\"}\n\tk == v\n\tk == input.want\n}\n\nallow if {\n\tinput.mode == \"index\"\n\tevery i, x in input.xs {\n\t\ti < 2\n\t\tx != \"stop\"\n\t}\n}\n",
+  "note": "`some k, v in xs` and `every k, v in xs` bind the key as well as the value: an array's index, an object's key. Both must come from the same element, so an owner at index 1 is not an owner at index 0, and a tenant matching one grant's key does not borrow another grant's value. An array's key is a number, so a string tenant never matches an index. `every` over an empty object holds; over a missing or non-object source it does not, and a list source binds indexes, never the string \"secret\". A set is keyed by its members, so `k == v` holds for each. `every i, x` over an array binds the index, so a third element fails `i < 2` whatever it holds. A key redeclared in a nested `every` shadows the outer one there, as OPA reads it.",
+  "rego": "package authz\n\nimport rego.v1\n\ndefault allow := false\n\nallow if {\n\tsome i, u in input.users\n\ti == 0\n\tu.role == \"owner\"\n}\n\nallow if {\n\tsome k, v in input.grants\n\tk == input.tenant\n\tv == \"write\"\n}\n\nallow if {\n\tinput.mode == \"audit\"\n\tevery k, v in input.labels {\n\t\tk != \"secret\"\n\t\tv != \"\"\n\t}\n}\n\nallow if {\n\tinput.mode == \"set\"\n\tsome k, v in {\"a\", \"b\"}\n\tk == v\n\tk == input.want\n}\n\nallow if {\n\tinput.mode == \"index\"\n\tevery i, x in input.xs {\n\t\ti < 2\n\t\tx != \"stop\"\n\t}\n}\n\nallow if {\n\tinput.mode == \"nested\"\n\tsome k, v in input.a\n\tevery x in input.b {\n\t\tsome k, w in x\n\t\tk == \"z\"\n\t\tw == v\n\t}\n}\n",
   "cases": [
     {
       "input": {
@@ -191,6 +191,48 @@
         "xs": []
       },
       "expected": 1
+    },
+    {
+      "input": {
+        "mode": "nested",
+        "a": {
+          "y": 1
+        },
+        "b": [
+          {
+            "z": 1
+          }
+        ]
+      },
+      "expected": 1
+    },
+    {
+      "input": {
+        "mode": "nested",
+        "a": {
+          "z": 1
+        },
+        "b": [
+          {
+            "y": 1
+          }
+        ]
+      },
+      "expected": 0
+    },
+    {
+      "input": {
+        "mode": "nested",
+        "a": {
+          "y": 1
+        },
+        "b": [
+          {
+            "z": 2
+          }
+        ]
+      },
+      "expected": 0
     }
   ]
 }

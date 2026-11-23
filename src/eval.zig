@@ -1036,6 +1036,32 @@ test "iter: a key binding sees the index, the object key, or the set element" {
     try testing.expect(!try evaluate(&arena, "{}", all));
 }
 
+test "iter: a nested key binding shadows an outer one, as in Rego" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    // `some k, v in input.a; every x in input.b { some k, w in x; k == "z"; w == v }`
+    // -- OPA accepts the inner `k` in the nested scope and reads it there.
+    const policy =
+        \\{"type":"some","var":"v","key":"k","source":{"type":"ref","path":["input","a"]},
+        \\ "body":[{"type":"every","var":"x","source":{"type":"ref","path":["input","b"]},
+        \\  "body":{"type":"some","var":"w","key":"k","source":{"type":"ref","path":["x"]},
+        \\   "body":[
+        \\    {"type":"eq","left":{"type":"ref","path":["k"]},"right":{"type":"value","value":"z"}},
+        \\    {"type":"eq","left":{"type":"ref","path":["w"]},"right":{"type":"ref","path":["v"]}}]}}]}
+    ;
+    try testing.expect(try evaluate(&arena, "{\"a\":{\"y\":1},\"b\":[{\"z\":1}]}", policy));
+    try testing.expect(!try evaluate(&arena, "{\"a\":{\"z\":1},\"b\":[{\"y\":1}]}", policy));
+}
+
+test "iter: an explicit values kind is accepted beside a key" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expect(try evaluate(&arena, "{\"m\":{\"a\":1}}",
+        \\{"type":"some","var":"v","key":"k","kind":"values","source":{"type":"ref","path":["input","m"]},
+        \\ "body":{"type":"eq","left":{"type":"ref","path":["v"]},"right":{"type":"value","value":1}}}
+    ));
+}
+
 test "iter: a key binding is rejected where it would be ambiguous" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
