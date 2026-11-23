@@ -456,6 +456,35 @@ check(
     decide({"users": []}, {**some_indexed_owner, "kind": "keys"}),
     -1,
 )
+every_key_value = {
+    "type": "every", "var": "v", "key": "k",
+    "source": {"type": "ref", "path": ["input", "labels"]},
+    "body": [
+        {"type": "neq", "left": {"type": "ref", "path": ["k"]}, "right": {"type": "value", "value": "secret"}},
+        {"type": "neq", "left": {"type": "ref", "path": ["v"]}, "right": {"type": "value", "value": ""}},
+    ],
+}
+check(
+    "every with key over an object: clean labels -> allow",
+    decide({"labels": {"team": "x", "env": "prod"}}, every_key_value),
+    1,
+)
+check(
+    "every with key over an object: a secret key -> deny",
+    decide({"labels": {"team": "x", "secret": "y"}}, every_key_value),
+    0,
+)
+# Rejected when the AST is built, so the export answers -1, never a decision.
+for name, bad in [
+    ("key equal to var", {**some_indexed_owner, "key": "u"}),
+    ("non-string key", {**some_indexed_owner, "key": 1}),
+    ("key named input", {**some_indexed_owner, "key": "input"}),
+    ("body reassigning the key", {
+        **some_indexed_owner,
+        "body": [{"type": "assign", "var": "i", "value": {"type": "value", "value": 0}}],
+    }),
+]:
+    check(f"some with {name} -> -1", decide({"users": ["owner"]}, bad), -1)
 
 some_value_true = {
     "type": "some", "var": "v", "kind": "values",
