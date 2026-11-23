@@ -432,6 +432,31 @@ check(
     0,
 )
 
+# `key` binds the key as well: an array's index, an object's key.
+some_indexed_owner = {
+    "type": "some", "var": "u", "key": "i",
+    "source": {"type": "ref", "path": ["input", "users"]},
+    "body": [
+        {"type": "eq", "left": {"type": "ref", "path": ["i"]}, "right": {"type": "value", "value": 0}},
+        {"type": "eq", "left": {"type": "ref", "path": ["u"]}, "right": {"type": "value", "value": "owner"}},
+    ],
+}
+check(
+    "some with key: owner at index 0 -> allow",
+    decide({"users": ["owner", "dev"]}, some_indexed_owner),
+    1,
+)
+check(
+    "some with key: owner at index 1 -> deny",
+    decide({"users": ["dev", "owner"]}, some_indexed_owner),
+    0,
+)
+check(
+    "some with key and kind keys -> -1",
+    decide({"users": []}, {**some_indexed_owner, "kind": "keys"}),
+    -1,
+)
+
 some_value_true = {
     "type": "some", "var": "v", "kind": "values",
     "source": {"type": "ref", "path": ["input", "flags"]},

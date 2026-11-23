@@ -517,6 +517,31 @@ check(
   0,
 );
 
+// `key` binds the key as well: an array's index, an object's key.
+const someIndexedOwner = {
+  type: 'some', var: 'u', key: 'i',
+  source: { type: 'ref', path: ['input', 'users'] },
+  body: [
+    { type: 'eq', left: { type: 'ref', path: ['i'] }, right: { type: 'value', value: 0 } },
+    { type: 'eq', left: { type: 'ref', path: ['u'] }, right: { type: 'value', value: 'owner' } },
+  ],
+};
+check(
+  'some with key: owner at index 0 -> allow',
+  decide({ users: ['owner', 'dev'] }, someIndexedOwner),
+  1,
+);
+check(
+  'some with key: owner at index 1 -> deny',
+  decide({ users: ['dev', 'owner'] }, someIndexedOwner),
+  0,
+);
+check(
+  'some with key and kind keys -> -1',
+  decide({ users: [] }, { ...someIndexedOwner, kind: 'keys' }),
+  -1,
+);
+
 // `kind` defaults to "keys" when omitted on an object source.
 const everyDefaultKeysNotBanned = {
   type: 'every', var: 'k',

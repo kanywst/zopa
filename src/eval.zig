@@ -473,7 +473,8 @@ fn evalMember(
     if (depth >= max_eval_depth) return error.EvalTooDeep;
     const needle = (try resolveDefined(m.left, input, scope, depth + 1)) orelse return null;
     const items: ItemIter = switch ((try resolveDefined(m.right, input, scope, depth + 1)) orelse return null) {
-        .array, .set => |xs| .{ .flat = xs },
+        .array => |xs| .{ .array = xs },
+        .set => |xs| .{ .set = xs },
         // Rego tests an object's values, not its keys.
         .object => |members| .{ .object_values = members },
         else => return false,
@@ -490,14 +491,15 @@ fn evalMember(
 /// elements through `len()` and `at()`.
 const ItemIter = union(enum) {
     none,
-    flat: []const json.Value,
+    array: []const json.Value,
+    set: []const json.Value,
     object_keys: []const json.Value.Member,
     object_values: []const json.Value.Member,
 
     fn len(self: ItemIter) usize {
         return switch (self) {
             .none => 0,
-            .flat => |xs| xs.len,
+            .array, .set => |xs| xs.len,
             .object_keys, .object_values => |members| members.len,
         };
     }
@@ -505,12 +507,43 @@ const ItemIter = union(enum) {
     fn at(self: ItemIter, i: usize) json.Value {
         return switch (self) {
             .none => unreachable,
-            .flat => |xs| xs[i],
+            .array, .set => |xs| xs[i],
             .object_keys => |members| .{ .string = members[i].key },
             .object_values => |members| members[i].value,
         };
     }
+
+    /// The key `some k, v in xs` binds, as OPA binds it: an array's
+    /// index, an object's key, and a set element itself (a set is keyed
+    /// by its members).
+    fn keyAt(self: ItemIter, i: usize) json.Value {
+        return switch (self) {
+            .none => unreachable,
+            .array => .{ .number = @floatFromInt(i) },
+            .set => |xs| xs[i],
+            .object_keys, .object_values => |members| .{ .string = members[i].key },
+        };
+    }
 };
+
+/// Run `body` for element `i`, with the value bound under `var_name`
+/// and, for `some k, v`, the key under `key_name` in an outer frame.
+fn evalIterBody(
+    it: ast.Expr.Iter,
+    items: ItemIter,
+    i: usize,
+    input: json.Value,
+    scope: ?*const Scope,
+    depth: u32,
+) HelperError!bool {
+    if (it.key_name) |key_name| {
+        const key_frame = Scope{ .parent = scope, .name = key_name, .bound = items.keyAt(i) };
+        const child = Scope{ .parent = &key_frame, .name = it.var_name, .bound = items.at(i) };
+        return evalBodyScoped(it.body, input, &child, depth);
+    }
+    const child = Scope{ .parent = scope, .name = it.var_name, .bound = items.at(i) };
+    return evalBodyScoped(it.body, input, &child, depth);
+}
 
 /// `some x in source: body`. True if the body holds for at least
 /// one binding; `null` (undefined) when the source is undefined or not
@@ -527,8 +560,7 @@ fn evalSome(
     if (items == .none) return null;
     var i: usize = 0;
     while (i < items.len()) : (i += 1) {
-        const child = Scope{ .parent = scope, .name = it.var_name, .bound = items.at(i) };
-        if (try evalBodyScoped(it.body, input, &child, depth + 1)) return true;
+        if (try evalIterBody(it, items, i, input, scope, depth + 1)) return true;
     }
     return false;
 }
@@ -550,8 +582,7 @@ fn evalEvery(
     if (items == .none) return null;
     var i: usize = 0;
     while (i < items.len()) : (i += 1) {
-        const child = Scope{ .parent = scope, .name = it.var_name, .bound = items.at(i) };
-        if (!try evalBodyScoped(it.body, input, &child, depth + 1)) return false;
+        if (!try evalIterBody(it, items, i, input, scope, depth + 1)) return false;
     }
     return true;
 }
@@ -567,8 +598,8 @@ fn iterItems(
 ) HelperError!ItemIter {
     const v = try resolveValue(source, input, scope, depth);
     return switch (v) {
-        .array => |xs| .{ .flat = xs },
-        .set => |xs| .{ .flat = xs },
+        .array => |xs| .{ .array = xs },
+        .set => |xs| .{ .set = xs },
         .object => |members| switch (kind) {
             .keys => .{ .object_keys = members },
             .values => .{ .object_values = members },
@@ -964,6 +995,57 @@ test "assign: nested where it cannot scope, it is an error" {
         \\ "body":{"type":"assign","var":"x","value":{"type":"value","value":1}}}
     ;
     try testing.expectError(error.AssignOutsideBody, evaluate(&arena, "{}", as_iter_body));
+}
+
+test "iter: a key binding sees the index, the object key, or the set element" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // `some i, x in input.xs; i == 1; x == "b"` -- the key and the value
+    // must come from the same element.
+    const pair =
+        \\{"type":"some","var":"x","key":"i","source":{"type":"ref","path":["input","xs"]},
+        \\ "body":[
+        \\  {"type":"eq","left":{"type":"ref","path":["i"]},"right":{"type":"value","value":1}},
+        \\  {"type":"eq","left":{"type":"ref","path":["x"]},"right":{"type":"value","value":"b"}}]}
+    ;
+    try testing.expect(try evaluate(&arena, "{\"xs\":[\"a\",\"b\"]}", pair));
+    try testing.expect(!try evaluate(&arena, "{\"xs\":[\"b\",\"a\"]}", pair));
+    // An object: the key binds the member name, the variable its value,
+    // without `kind` saying so.
+    const obj =
+        \\{"type":"some","var":"v","key":"k","source":{"type":"ref","path":["input","m"]},
+        \\ "body":[
+        \\  {"type":"eq","left":{"type":"ref","path":["k"]},"right":{"type":"value","value":"a"}},
+        \\  {"type":"eq","left":{"type":"ref","path":["v"]},"right":{"type":"value","value":1}}]}
+    ;
+    try testing.expect(try evaluate(&arena, "{\"m\":{\"b\":2,\"a\":1}}", obj));
+    try testing.expect(!try evaluate(&arena, "{\"m\":{\"a\":2,\"b\":1}}", obj));
+    // A set is keyed by its members.
+    try testing.expect(try evaluate(&arena, "{}",
+        \\{"type":"every","var":"v","key":"k","source":{"type":"set","items":["a","b"]},
+        \\ "body":{"type":"eq","left":{"type":"ref","path":["k"]},"right":{"type":"ref","path":["v"]}}}
+    ));
+    // `every` checks each pair; a missing source is still undefined.
+    const all =
+        \\{"type":"every","var":"v","key":"k","source":{"type":"ref","path":["input","m"]},
+        \\ "body":{"type":"neq","left":{"type":"ref","path":["k"]},"right":{"type":"value","value":"b"}}}
+    ;
+    try testing.expect(try evaluate(&arena, "{\"m\":{\"a\":1}}", all));
+    try testing.expect(!try evaluate(&arena, "{\"m\":{\"a\":1,\"b\":2}}", all));
+    try testing.expect(!try evaluate(&arena, "{}", all));
+}
+
+test "iter: a key binding is rejected where it would be ambiguous" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const body = "\"body\":{\"type\":\"ref\",\"path\":[\"x\"]}}";
+    const src = "\"source\":{\"type\":\"ref\",\"path\":[\"input\",\"xs\"]},";
+    try testing.expectError(error.DuplicateAssignment, evaluate(&arena, "{}", "{\"type\":\"some\",\"var\":\"x\",\"key\":\"x\"," ++ src ++ body));
+    try testing.expectError(error.KindWithKey, evaluate(&arena, "{}", "{\"type\":\"some\",\"var\":\"x\",\"key\":\"k\",\"kind\":\"keys\"," ++ src ++ body));
+    try testing.expectError(error.InvalidKey, evaluate(&arena, "{}", "{\"type\":\"some\",\"var\":\"x\",\"key\":1," ++ src ++ body));
+    try testing.expectError(error.DuplicateAssignment, evaluate(&arena, "{}", "{\"type\":\"some\",\"var\":\"x\",\"key\":\"k\"," ++ src ++
+        "\"body\":[{\"type\":\"assign\",\"var\":\"k\",\"value\":{\"type\":\"value\",\"value\":1}}]}"));
 }
 
 test "iter: a list body is a conjunction over the bound variable" {

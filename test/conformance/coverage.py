@@ -80,6 +80,8 @@ CORPUS: list[tuple[str, str, str]] = [
     ("iter/every-in", "every ... in", "allow if every x in input.xs { x == 1 }"),
     ("iter/every-multi", "every with a multi-expression body",
      "allow if every x in input.xs {\n\tx != 0\n\tx < 10\n}"),
+    ("iter/some-kv", "some k, v in ...", "allow if {\n\tsome i, x in input.xs\n\ti == 0\n\tx == 1\n}"),
+    ("iter/every-kv", "every k, v in ...", 'allow if every k, v in input.m { k != "x"; v == 1 }'),
     ("iter/underscore", "wildcard iteration", "allow if input.xs[_] == 1"),
 
     # --- builtins ---
