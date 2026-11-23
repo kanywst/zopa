@@ -215,6 +215,7 @@ Used as the `source` of a `some` / `every`, or as a literal compared for equalit
 {
   "type": "some",
   "var":  "x",
+  "key":  "k",
   "kind": "keys" | "values",
   "source": <Expr>,
   "body":   <Expr> | [ <Expr>, ... ]
@@ -225,9 +226,11 @@ Resolves `source` to an array, set, or object, then evaluates `body` once for ea
 
 `body` is one expression or a list of them. A list is a conjunction evaluated like a rule body: `assign` works inside it, its binding lasts for the rest of the list within one iteration, and binding a name twice in the same list, or rebinding the iterator's own variable, is rejected when the AST is built (`error.DuplicateAssignment`). An empty list holds, so `some` with `"body": []` is true iff the source has an element. On `every` an empty list is rejected when the AST is built (`error.EmptyEveryBody`): it would hold over any collection, and OPA refuses `every x in xs {}` as an empty body. A lone `assign` as the single-expression form is rejected (`error.AssignOutsideBody`): it has nothing to scope over.
 
-`tools/rego2ast.py` converts Rego's standalone `some x in xs` into this node with a list body holding every statement after the declaration, and `"kind": "values"`, since Rego binds an object's values. Statements before the declaration stay outside, and their bindings remain visible inside. `some k, v in xs` and `some x` without `in` are refused.
+`tools/rego2ast.py` converts Rego's standalone `some x in xs` into this node with a list body holding every statement after the declaration, and `"kind": "values"`, since Rego binds an object's values. Statements before the declaration stay outside, and their bindings remain visible inside. `some k, v in xs` converts the same way with `"key": "k"`; a wildcard key (`some _, v`) is dropped. `some x` without `in` is refused.
 
 `kind` only matters when `source` resolves to a JSON object. With `"keys"` (the default), `x` binds to each key as a string; with `"values"`, to each member's value. Arrays and sets ignore `kind` and bind elements directly.
+
+`key` is optional and binds a second name to each element's key, as Rego's `some k, v in xs` does: an array's index (a number), an object's key (a string), and for a set the element itself. With `key` present, `var` binds the value, so `kind` defaults to `"values"`; `"kind": "keys"` alongside it is rejected when the AST is built (`error.KindWithKey`), as is a `key` equal to `var` or reassigned in a list body (`error.DuplicateAssignment`) and a non-string `key` (`error.InvalidKey`). A `var`, `key` or `assign` target named `input` is rejected too (`error.ShadowsInput`): a ref opening with `input` always reads the input root, so the binding could never be read, and OPA refuses the name as well.
 
 ### `every` -- universal
 
@@ -235,13 +238,14 @@ Resolves `source` to an array, set, or object, then evaluates `body` once for ea
 {
   "type": "every",
   "var":  "x",
+  "key":  "k",
   "kind": "keys" | "values",
   "source": <Expr>,
   "body":   <Expr> | [ <Expr>, ... ]
 }
 ```
 
-Same shape as `some`, but the body must hold for every element. An empty array, set or object yields `true` (vacuous). A source that is undefined or is not a collection makes `every` undefined, as in OPA -- a missing field is not "nothing to check". The body fails, and a negation of it fails too. The same holds for `some`. `kind` works as for `some`.
+Same shape as `some`, but the body must hold for every element. An empty array, set or object yields `true` (vacuous). A source that is undefined or is not a collection makes `every` undefined, as in OPA -- a missing field is not "nothing to check". The body fails, and a negation of it fails too. The same holds for `some`. `kind` and `key` work as for `some`; `tools/rego2ast.py` converts `every k, v in xs` into `key`.
 
 ### `in` -- membership
 

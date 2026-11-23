@@ -1,6 +1,6 @@
 {
-  "supported": 37,
-  "total": 52,
+  "supported": 39,
+  "total": 54,
   "constructs": {
     "rule/constant": true,
     "rule/default-deny": true,
@@ -37,6 +37,8 @@
     "iter/some-in": true,
     "iter/every-in": true,
     "iter/every-multi": true,
+    "iter/some-kv": true,
+    "iter/every-kv": true,
     "iter/underscore": false,
     "builtin/startswith": true,
     "builtin/endswith": true,

@@ -74,7 +74,7 @@ Four things moved in the ecosystem zopa lives in, and they shape what is worth b
 ## Near term
 
 - **Streaming evaluation runtime.** Build on the body-deps analyser to skip body buffering when no body refs exist, or short-circuit as soon as referenced prefixes resolve. Design in `docs/proposals/streaming-evaluation.md`.
-- **Conformance corpus expansion.** `zig build test-coverage` now answers "which constructs" (37 of 52 as of v0.6.0), so the number exists. What is still missing is breadth: vendor a slice of the OPA upstream test corpus rather than a hand-written probe, and close the constructs the ledger reports as out of reach.
+- **Conformance corpus expansion.** `zig build test-coverage` now answers "which constructs" (39 of 54 on `main`), so the number exists. What is still missing is breadth: vendor a slice of the OPA upstream test corpus rather than a hand-written probe, and close the constructs the ledger reports as out of reach.
 - **Structured response replacement.** Surface a `json.Value` from the evaluator so a denied `allow_response` rule can return `{status, body, headers}` instead of the fixed 503.
 - **Per-context request snapshot.** Surface `:method` / `:path` / selected headers under `proxy_on_request_body` so body rules can reason about request context too.
 

@@ -4,6 +4,14 @@ All notable changes are recorded here. Format follows [Keep a Changelog][kac]; r
 
 ## [Unreleased]
 
+### Added
+
+- **`some k, v in xs` and `every k, v in xs` convert.** `some` / `every` take an optional `"key"` naming a second binding for each element's key, as OPA binds it: an array's index (a number), an object's key, and a set element itself. With `key`, `var` binds the value and `kind` defaults to `"values"`; `"kind": "keys"` beside it, a `key` equal to `var`, a non-string `key`, or a list body reassigning it are rejected when the AST is built. `rego2ast.py` emits it for both forms, drops a wildcard key, and still refuses a constant key (`some "a", v in xs`), which is a match rather than a binding. Additive: an AST without `key` builds and evaluates as before. `zig build test-coverage` goes from 37/52 to 39/54. Fixture `34_some_every_key_value` is checked against `opa eval`.
+
+### Changed
+
+- **A binding named `input` is rejected when the AST is built** (`error.ShadowsInput`), on `some` / `every` `var` and `key` and on `assign`. A ref opening with `input` always reads the input root, so such a binding could never be read, and the body tested the request where its author meant the element. OPA refuses the name too ("variables must not shadow input"), and `rego2ast.py` never emitted it; only a hand-built AST is affected.
+
 ## [0.7.0] - 2026-10-31
 
 One feature and four converter holes closed, two of them fail-opens.

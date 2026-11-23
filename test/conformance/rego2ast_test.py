@@ -60,8 +60,17 @@ class Refusals(unittest.TestCase):
     def test_with_modifier_says_why(self):
         self.assertRefused("allow if input.x == 1 with input.y as 2", "`with` modifier")
 
-    def test_some_with_a_key_binding_is_refused(self):
-        self.assertRefused("allow if {\n\tsome k, v in input.m\n\tv == 1\n}", "`some k, v in xs`")
+    def test_key_binding_on_a_constant_is_refused(self):
+        # `some "a", v in obj` matches a key rather than binding one.
+        self.assertRefused('allow if {\n\tsome "a", v in input.m\n\tv == 1\n}', "plain variable")
+
+    def test_key_and_value_sharing_a_name_is_refused(self):
+        # OPA reads it as "key equals value"; two frames would not.
+        self.assertRefused("allow if {\n\tsome x, x in input.m\n\tx\n}", "`x` is declared twice")
+        self.assertRefused("allow if every x, x in input.m { x }", "both key and value")
+
+    def test_key_binding_redeclared_in_the_body_is_refused(self):
+        self.assertRefused("allow if every k, v in input.m { k := 1 }", "`k` is declared twice")
 
     def test_some_without_in_is_refused(self):
         # Bound by unification with `input.xs[x]`; zopa has none, and the
@@ -118,10 +127,6 @@ class Refusals(unittest.TestCase):
         self.assertRefused(
             "allow if {\n\tx := 1\n\tx := 2\n\tx == 2\n}", "assigned twice in one body",
         )
-
-    def test_every_with_a_key_binding_is_refused(self):
-        # Dropping `k` would leave it a bare ref into the input.
-        self.assertRefused('allow if every k, v in input.m { k != "x" }', "key binding")
 
     def test_head_value_naming_a_body_binding_is_refused(self):
         # zopa evaluates the value outside the body's scope, so `y`
@@ -276,6 +281,21 @@ class Conversions(unittest.TestCase):
         self.assertEqual(ast["rules"][0]["body"][0]["var"], "v")
         self.assertEqual(ast["rules"][0]["body"][0]["kind"], "values")
 
+    def test_some_with_a_key_binds_both_names(self):
+        ast = self.assertConverts('allow if {\n\tsome k, v in input.m\n\tk == "a"\n\tv == 1\n}')
+        some = ast["rules"][0]["body"][0]
+        self.assertEqual((some["type"], some["key"], some["var"], some["kind"]), ("some", "k", "v", "values"))
+        self.assertEqual(len(some["body"]), 2)
+
+    def test_every_with_a_key_binds_both_names(self):
+        ast = self.assertConverts('allow if every k, v in input.m { k != "x" }')
+        every = ast["rules"][0]["body"][0]
+        self.assertEqual((every["key"], every["var"]), ("k", "v"))
+
+    def test_wildcard_key_binds_nothing(self):
+        # `_` binds nothing, so it is dropped rather than bound as `$0`.
+        ast = self.assertConverts("allow if {\n\tsome _, v in input.m\n\tv == 1\n}")
+        self.assertNotIn("key", ast["rules"][0]["body"][0])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

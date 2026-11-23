@@ -517,6 +517,61 @@ check(
   0,
 );
 
+// `key` binds the key as well: an array's index, an object's key.
+const someIndexedOwner = {
+  type: 'some', var: 'u', key: 'i',
+  source: { type: 'ref', path: ['input', 'users'] },
+  body: [
+    { type: 'eq', left: { type: 'ref', path: ['i'] }, right: { type: 'value', value: 0 } },
+    { type: 'eq', left: { type: 'ref', path: ['u'] }, right: { type: 'value', value: 'owner' } },
+  ],
+};
+check(
+  'some with key: owner at index 0 -> allow',
+  decide({ users: ['owner', 'dev'] }, someIndexedOwner),
+  1,
+);
+check(
+  'some with key: owner at index 1 -> deny',
+  decide({ users: ['dev', 'owner'] }, someIndexedOwner),
+  0,
+);
+check(
+  'some with key and kind keys -> -1',
+  decide({ users: [] }, { ...someIndexedOwner, kind: 'keys' }),
+  -1,
+);
+const everyKeyValue = {
+  type: 'every', var: 'v', key: 'k',
+  source: { type: 'ref', path: ['input', 'labels'] },
+  body: [
+    { type: 'neq', left: { type: 'ref', path: ['k'] }, right: { type: 'value', value: 'secret' } },
+    { type: 'neq', left: { type: 'ref', path: ['v'] }, right: { type: 'value', value: '' } },
+  ],
+};
+check(
+  'every with key over an object: clean labels -> allow',
+  decide({ labels: { team: 'x', env: 'prod' } }, everyKeyValue),
+  1,
+);
+check(
+  'every with key over an object: a secret key -> deny',
+  decide({ labels: { team: 'x', secret: 'y' } }, everyKeyValue),
+  0,
+);
+// Rejected when the AST is built, so the export answers -1, never a decision.
+for (const [name, bad] of [
+  ['key equal to var', { ...someIndexedOwner, key: 'u' }],
+  ['non-string key', { ...someIndexedOwner, key: 1 }],
+  ['key named input', { ...someIndexedOwner, key: 'input' }],
+  ['body reassigning the key', {
+    ...someIndexedOwner,
+    body: [{ type: 'assign', var: 'i', value: { type: 'value', value: 0 } }],
+  }],
+]) {
+  check(`some with ${name} -> -1`, decide({ users: ['owner'] }, bad), -1);
+}
+
 // `kind` defaults to "keys" when omitted on an object source.
 const everyDefaultKeysNotBanned = {
   type: 'every', var: 'k',

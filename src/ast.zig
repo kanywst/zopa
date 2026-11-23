@@ -115,8 +115,14 @@ pub const Expr = union(enum) {
     ///
     /// `kind` only matters when the source resolves to a JSON object;
     /// for arrays and sets it is ignored.
+    ///
+    /// `key_name` is Rego's `some k, v in xs`: a second binding for the
+    /// element's key -- an array's index, an object's key, a set
+    /// element itself, as OPA binds them. With it, `var_name` always
+    /// binds the value, so `kind` is fixed to `.values` at build time.
     pub const Iter = struct {
         var_name: []const u8,
+        key_name: ?[]const u8 = null,
         source: *const Expr,
         body: []const *const Expr,
         kind: IterKind = .keys,
@@ -339,6 +345,14 @@ fn buildRule(allocator: std.mem.Allocator, node: Value) !Rule {
     };
 }
 
+/// A binding named `input` could never be read: a ref opening with
+/// `input` always resolves against the input root, so the body would
+/// test the request where its author meant the element. OPA refuses the
+/// same name ("variables must not shadow input").
+fn shadowsInput(name: []const u8) bool {
+    return std.mem.eql(u8, name, "input");
+}
+
 /// Build a single expression. See `docs/ast.md` for the accepted JSON
 /// shapes; the compare operator names (`eq`, `neq`, `lt`, ...) are
 /// recognised as shorthand for `{"type":"compare","op":...}`.
@@ -377,6 +391,7 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
         const var_v = try requireField(obj, "var");
         if (var_v != .string) return error.InvalidVar;
         if (var_v.string.len == 0) return error.InvalidVar;
+        if (shadowsInput(var_v.string)) return error.ShadowsInput;
         const value_v = try requireField(obj, "value");
         expr.* = .{ .assign = .{
             .var_name = var_v.string,
@@ -416,12 +431,26 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
         expr.* = .{ .value = .{ .set = items } };
     } else if (std.mem.eql(u8, t, "some") or std.mem.eql(u8, t, "every")) {
         const var_name = try requireString(obj, "var");
+        if (shadowsInput(var_name)) return error.ShadowsInput;
         const source_v = try requireField(obj, "source");
         const body_v = try requireField(obj, "body");
+        const key_name: ?[]const u8 = if (json.lookupMember(obj, "key")) |k_v| blk: {
+            if (k_v != .string) return error.InvalidKey;
+            // `some x, x in xs` would bind one name twice; OPA reads it
+            // as "key equals value", zopa would let the inner frame win.
+            if (std.mem.eql(u8, k_v.string, var_name)) return error.DuplicateAssignment;
+            if (shadowsInput(k_v.string)) return error.ShadowsInput;
+            break :blk k_v.string;
+        } else null;
         const kind: Expr.IterKind = if (json.lookupMember(obj, "kind")) |k_v| blk: {
             if (k_v != .string) return error.InvalidKind;
-            break :blk Expr.IterKind.fromString(k_v.string) orelse return error.UnknownKind;
-        } else .keys;
+            const parsed = Expr.IterKind.fromString(k_v.string) orelse return error.UnknownKind;
+            // With a key binding the value variable binds values; an
+            // explicit `"keys"` would ask for the key twice, and quietly
+            // ignoring it would hand the body something it did not ask for.
+            if (key_name != null and parsed == .keys) return error.KindWithKey;
+            break :blk parsed;
+        } else if (key_name != null) .values else .keys;
         // The body is either one expression or a statement list. The
         // list form is what `rego2ast.py` emits for a standalone
         // `some x in xs`, whose binding covers the rest of the rule
@@ -451,7 +480,10 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
             // AST reaches here directly, and shadowing the element
             // would silently test something other than what was bound.
             for (buf) |stmt| switch (stmt.*) {
-                .assign => |a| if (std.mem.eql(u8, a.var_name, var_name)) return error.DuplicateAssignment,
+                .assign => |a| {
+                    if (std.mem.eql(u8, a.var_name, var_name)) return error.DuplicateAssignment;
+                    if (key_name) |k| if (std.mem.eql(u8, a.var_name, k)) return error.DuplicateAssignment;
+                },
                 else => {},
             };
             break :blk buf;
@@ -464,6 +496,7 @@ pub fn buildExpr(allocator: std.mem.Allocator, node: Value) !*Expr {
         };
         const iter = Expr.Iter{
             .var_name = var_name,
+            .key_name = key_name,
             .source = try buildExpr(allocator, source_v),
             .body = body,
             .kind = kind,

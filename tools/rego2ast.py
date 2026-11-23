@@ -182,7 +182,8 @@ def _check_expr_scope(expr: dict[str, Any], scope: frozenset[str]) -> None:
     elif t in ("some", "every"):
         _check_expr_scope(expr["source"], scope)
         body = expr["body"]
-        _check_scope(body if isinstance(body, list) else [body], scope | {expr["var"]})
+        bound = {expr["var"]} | ({expr["key"]} if "key" in expr else set())
+        _check_scope(body if isinstance(body, list) else [body], scope | bound)
 
 
 def _body_bindings(body: list[dict[str, Any]]) -> set[str]:
@@ -199,6 +200,8 @@ def _body_bindings(body: list[dict[str, Any]]) -> set[str]:
             names.add(expr["var"])
         elif expr.get("type") == "some" and isinstance(expr.get("body"), list):
             names.add(expr["var"])
+            if "key" in expr:
+                names.add(expr["key"])
             names |= _body_bindings(expr["body"])
     return names
 
@@ -254,15 +257,17 @@ def walk_body(
                 raise Unsupported(
                     "`with` modifier not supported: it would change the input the body sees"
                 )
-            var, source = _some_in_declaration(terms["symbols"])
-            out.append({
-                "type": "some",
-                "var": var,
+            key, var, source = _some_in_declaration(terms["symbols"])
+            some: dict[str, Any] = {"type": "some", "var": var}
+            if key is not None:
+                some["key"] = key
+            some.update({
                 "source": source,
                 # Rego binds an object's *values* here, as for `every`.
                 "kind": "values",
                 "body": walk_body(exprs[i + 1 :]),
             })
+            out.append(some)
             return out
         out.append(walk_expr(expr))
     return out
@@ -294,10 +299,12 @@ def _rego_bindings(expr: dict[str, Any]) -> list[tuple[str, str]]:
     return []
 
 
-def _some_in_declaration(symbols: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
-    """`some x in xs` -> (`x`, zopa source). The other declaration
-    shapes stay refused, each for a reason that would otherwise convert
-    into a different policy."""
+def _some_in_declaration(
+    symbols: list[dict[str, Any]],
+) -> tuple[str | None, str, dict[str, Any]]:
+    """`some x in xs` -> (None, `x`, zopa source); `some k, v in xs` ->
+    (`k`, `v`, source). The other declaration shapes stay refused, each
+    for a reason that would otherwise convert into a different policy."""
     if len(symbols) != 1:
         raise Unsupported("`some` declaring several names at once not supported")
     decl = symbols[0]
@@ -310,18 +317,34 @@ def _some_in_declaration(symbols: list[dict[str, Any]]) -> tuple[str, dict[str, 
         )
     op = _describe_ref(decl["value"][0])
     args = decl["value"][1:]
-    if op == "internal.member_3":
-        raise Unsupported(
-            "`some k, v in xs` not supported: zopa binds one variable per iteration"
-        )
-    if op != "internal.member_2" or len(args) != 2:
+    if op == "internal.member_3" and len(args) == 3:
+        key = _iteration_key(args[0])
+        target = args[1]
+    elif op == "internal.member_2" and len(args) == 2:
+        key = None
+        target = args[0]
+    else:
         raise Unsupported(f"unrecognized `some` declaration: {op}")
-    target = args[0]
     if target.get("type") != "var":
         raise Unsupported(
             "`some` target must be a plain variable; destructuring is not supported"
         )
-    return target["value"], walk_term(args[1])
+    return key, target["value"], walk_term(args[-1])
+
+
+def _iteration_key(term: dict[str, Any]) -> str | None:
+    """The key of `some k, v in xs` / `every k, v in xs`. A wildcard
+    (`_`, which OPA renames `$0`) binds nothing and is dropped; a
+    non-variable key would be a pattern match, which zopa does not do."""
+    name = term.get("value")
+    if term.get("type") != "var" or not isinstance(name, str):
+        raise Unsupported(
+            "key of `some k, v` / `every k, v` must be a plain variable; "
+            "matching on a constant key is not supported"
+        )
+    if re.fullmatch(r"\$\d+", name):
+        return None
+    return name
 
 
 def _var_names(term: Any) -> set[str]:
@@ -458,7 +481,16 @@ def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
     value = terms.get("value")
     if value is None or value.get("type") != "var":
         raise Unsupported("every: missing iteration variable name")
-    body_exprs = walk_body(terms.get("body", []), frozenset({value["value"]}))
+    # `every k, v in xs` binds the key as well, as zopa's `key`.
+    key = terms.get("key")
+    key_name = _iteration_key(key) if key is not None else None
+    if key_name is not None and key_name == value["value"]:
+        # OPA reads it as "key equals value"; zopa binds two frames and
+        # the inner one would win. `some x, x` is caught as a name
+        # declared twice in `walk_body`.
+        raise Unsupported("`every x, x in xs` binds one name as both key and value")
+    claimed = {value["value"]} | ({key_name} if key_name is not None else set())
+    body_exprs = walk_body(terms.get("body", []), frozenset(claimed))
     # One plain expression keeps the single-expression form; anything
     # else -- several statements, or a lone binding the object form
     # would refuse -- goes out as a statement list.
@@ -467,20 +499,10 @@ def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
     else:
         body_inner = body_exprs
 
-    # `every k, v in xs` binds the key as well. zopa's `every` binds one
-    # variable, and dropping `k` would leave it a bare ref resolving
-    # against the input. A wildcard (`_`, which OPA renames `$0`) binds
-    # nothing and is fine.
-    key = terms.get("key")
-    key_name = key.get("value") if isinstance(key, dict) else None
-    if key is not None and not (
-        key.get("type") == "var" and isinstance(key_name, str) and re.fullmatch(r"\$\d+", key_name)
-    ):
-        raise Unsupported("`every` with a key binding not supported: zopa binds one variable")
-
-    out: dict[str, Any] = {
-        "type": "every",
-        "var": value["value"],
+    out: dict[str, Any] = {"type": "every", "var": value["value"]}
+    if key_name is not None:
+        out["key"] = key_name
+    out.update({
         "source": domain,
         "body": body_inner,
         # Rego binds an object's *values* here. zopa's AST defaults to
@@ -488,7 +510,7 @@ def walk_every(terms: dict[str, Any]) -> dict[str, Any]:
         # `every v in obj { v != "x" }` into a check of the keys.
         # Arrays and sets ignore `kind`.
         "kind": "values",
-    }
+    })
     return out
 
 
