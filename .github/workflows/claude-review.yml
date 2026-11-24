@@ -83,7 +83,7 @@ jobs:
           prompt: |
             Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
 
-            zopa is a ~60 KB authorization engine compiled to
+            zopa is a ~75 KB authorization engine compiled to
             wasm32-freestanding and loaded as a proxy-wasm filter. It decides
             whether HTTP requests are allowed. Review it as security-relevant
             infrastructure, not as an application.
@@ -114,7 +114,7 @@ jobs:
             5. Hot-path allocation. Evaluation runs against a reset arena and
                is expected not to grow linear memory in steady state. Flag
                new allocations that outlive a request.
-            6. Size budget. The release build is ~60 KB. Call out changes
+            6. Size budget. The release build is ~75 KB. Call out changes
                likely to move that materially, and say why.
 
             Also flag missing test coverage for a behaviour change: unit tests
