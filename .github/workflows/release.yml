@@ -32,7 +32,7 @@ jobs:
       subjects-base64: ${{ steps.pack.outputs.subjects-base64 }}
     steps:
       - name: harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
 
@@ -75,7 +75,7 @@ jobs:
       # in a format a scanner already ingests, and it carries the
       # artifact's hash, licence and toolchain alongside.
       - name: generate sbom
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           file: ${{ steps.pack.outputs.wasm-name }}
           format: cyclonedx-json
@@ -137,7 +137,7 @@ jobs:
       id-token: write
     steps:
       - name: harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
 
